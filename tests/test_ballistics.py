@@ -7,11 +7,27 @@ from shellshock_detector.ballistics import (
     GRAVITY_AT_REFERENCE,
     SPEED_PER_POWER_AT_REFERENCE,
     predicted_horizontal_displacement,
+    refine_normal_integer_shot,
     solve_target,
 )
 
 
 class BallisticsTests(unittest.TestCase):
+    def test_fixed_power_solver_keeps_a_negative_angle_for_a_lower_target(self):
+        result = solve_target(0, 0, 100, 100, 0, "right", 1920)
+
+        angles = [solution["angle_degrees"] for solution in result["power_100"]["solutions"]]
+        self.assertTrue(any(angle < 0 for angle in angles))
+    def test_integer_refinement_returns_integer_controls_and_error(self):
+        shot = refine_normal_integer_shot(
+            0, 0, 1000, 0, 0, "right", 1920,
+            theory_angle=45.4, theory_power=63.7,
+        )
+
+        self.assertIs(type(shot["angle_degrees"]), int)
+        self.assertIs(type(shot["power"]), int)
+        self.assertGreaterEqual(shot["target_error"], 0.0)
+
     def test_no_wind_same_height_has_45_degree_minimum_power_solution(self):
         result = solve_target(0, 0, 1000, 0, 0, "right", 1920)
 

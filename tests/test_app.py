@@ -16,9 +16,21 @@ from shellshock_detector.app import (
     screen_to_client_point,
 )
 from shellshock_detector.models import Detection, DetectionResult, Wind
+from shellshock_detector.obstacle_geometry import ObstacleGeometry
 
 
 class AppTests(unittest.TestCase):
+    def test_reflection_without_obstacles_falls_back_to_integer_normal_shot(self):
+        result = DetectionResult(1920, 1080, Detection(1000, 800, 0.9), [], Wind(0, "right", 0.9), [])
+
+        solution, _ = aim_click_for_target(
+            result, 2000, 800, shot_mode="reflection", geometry=ObstacleGeometry([], [])
+        )
+
+        self.assertEqual(solution["selected"]["fallback"], "normal:no-obstacle")
+        self.assertIs(type(solution["selected"]["angle_degrees"]), int)
+        self.assertIs(type(solution["selected"]["power"]), int)
+
     def test_ensure_game_window_is_active_reactivates_the_captured_window(self):
         activated: list[int] = []
 
@@ -55,7 +67,10 @@ class AppTests(unittest.TestCase):
 
         self.assertEqual(solution["target_direction"], "right")
         self.assertAlmostEqual(solution["minimum_power"]["angle_degrees"], 45.0, places=4)
-        self.assertEqual(click_point, (1146, 660))
+        self.assertIs(type(solution["selected"]["angle_degrees"]), int)
+        self.assertIs(type(solution["selected"]["power"]), int)
+        self.assertGreaterEqual(solution["selected"]["target_error"], 0)
+        self.assertNotEqual(click_point, (1000, 800))
 
     def test_aim_click_for_target_uses_zero_wind_when_wind_value_is_missing(self):
         no_wind = DetectionResult(1920, 1080, Detection(1000, 800, 0.9), [], Wind(None, None, 0.0), [])
@@ -63,7 +78,8 @@ class AppTests(unittest.TestCase):
         solution, click_point = aim_click_for_target(no_wind, 2000, 800)
 
         self.assertEqual(solution["wind_acceleration"], 0.0)
-        self.assertEqual(click_point, (1146, 660))
+        self.assertIs(type(solution["selected"]["angle_degrees"]), int)
+        self.assertNotEqual(click_point, (1000, 800))
 
     def test_aim_click_for_target_refuses_over_limit_solution(self):
         far_target = DetectionResult(1920, 1080, Detection(1000, 800, 0.9), [], Wind(0, "right", 0.9), [])
@@ -77,14 +93,18 @@ class AppTests(unittest.TestCase):
         solution, click_point = aim_click_for_target(result, 2000, 800, shot_mode="maximum")
 
         high_arc = solution["power_100"]["solutions"][-1]
-        self.assertEqual(click_point, (1067, 485))
+        self.assertIs(type(solution["selected"]["angle_degrees"]), int)
+        self.assertEqual(solution["selected"]["power"], 98)
+        self.assertNotEqual(click_point, (1000, 800))
         self.assertGreater(high_arc["angle_degrees"], 70)
 
-    def test_maximum_mode_refuses_a_lone_low_100_power_arc(self):
+    def test_maximum_mode_uses_the_only_reachable_100_power_arc(self):
         result = DetectionResult(3840, 1800, Detection(1557, 1378, 0.9), [], Wind(76, "right", 0.9), [])
 
-        with self.assertRaisesRegex(RuntimeError, "high-angle"):
-            aim_click_for_target(result, 2196, 1381, shot_mode="maximum")
+        solution, _ = aim_click_for_target(result, 2196, 1381, shot_mode="maximum")
+
+        self.assertEqual(len(solution["power_100"]["solutions"]), 1)
+        self.assertEqual(solution["selected"]["power"], 100)
 
     def test_process_name_matches_when_window_title_is_empty(self):
         self.assertTrue(matches_game_window("", "ShellShockLive.exe"))

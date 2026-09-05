@@ -21,6 +21,11 @@ class AimingTests(unittest.TestCase):
 
         self.assertEqual(point, (888, 689))
 
+    def test_negative_angle_returns_a_point_below_the_aim_disc_center(self):
+        point = disc_click_point(1000, 800, "right", -30, 50, 1920)
+
+        self.assertGreater(point[1], 804)
+
     def test_full_power_at_zero_degrees_uses_full_right_radius(self):
         point = disc_click_point(1000, 800, "right", 0, 100, 1920)
 
@@ -34,7 +39,7 @@ class AimingTests(unittest.TestCase):
     def test_invalid_inputs_raise_value_error(self):
         invalid_arguments = (
             (1000, 800, "up", 45, 50, 1920),
-            (1000, 800, "right", -1, 50, 1920),
+            (1000, 800, "right", -91, 50, 1920),
             (1000, 800, "right", 91, 50, 1920),
             (1000, 800, "right", 45, -1, 1920),
             (1000, 800, "right", 45, 101, 1920),

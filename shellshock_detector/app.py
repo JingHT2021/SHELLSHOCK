@@ -16,9 +16,11 @@ import win32api
 import win32con
 
 from .aiming import disc_click_point
-from .ballistics import solve_target
+from .ballistics import refine_normal_integer_shot, solve_target
 from .dpi import client_capture_box, enable_per_monitor_dpi_awareness
 from .models import DetectionResult
+from .obstacle_geometry import ObstacleGeometry, detect_pink_obstacle_geometry
+from .reflection import solve_single_reflection
 from .resolution import resolution_warning
 from .training_data import save_training_sample
 from .wind import detect_wind
@@ -54,7 +56,8 @@ def aim_click_for_target(
     target_x: int,
     target_y: int,
     manual_self: tuple[int, int] | None = None,
-    shot_mode: str = "minimum",
+    shot_mode: str = "normal",
+    geometry: ObstacleGeometry | None = None,
 ) -> tuple[dict[str, object], tuple[int, int]]:
     """Return the shot solution and its client-relative aim-disc click point."""
     if manual_self is None and result.self_tank is None:
@@ -77,19 +80,41 @@ def aim_click_for_target(
         wind_direction or "right",
         result.image_width,
     )
-    if shot_mode == "minimum":
-        selected = solution["minimum_power"]
-        if selected.get("status") != "reachable":
-            raise RuntimeError("aim skipped: target has no usable 0--90 degree solution")
-        if not selected["within_power_limit"]:
-            raise RuntimeError("aim skipped: minimum power is over 100")
-    elif shot_mode == "maximum":
-        maximum_solutions = solution["power_100"]["solutions"]
-        if len(maximum_solutions) < 2:
-            raise RuntimeError("aim skipped: target has no reachable high-angle 100-power arc")
-        selected = {**maximum_solutions[-1], "power": 100.0}
+    fallback: str | None = None
+    if shot_mode == "reflection" and geometry is not None and (geometry.circles or geometry.lines):
+        selected = solve_single_reflection(
+            (int(self_x), int(self_y)), (target_x, target_y), float(wind_value),
+            wind_direction or "right", result.image_width, geometry,
+        )
+        if selected.get("status") not in {"reachable", "closest"}:
+            raise RuntimeError(f"aim skipped: {selected.get('reason', 'no valid one-reflection solution')}")
     else:
-        raise ValueError("shot_mode must be 'minimum' or 'maximum'")
+        if shot_mode == "reflection":
+            fallback = "normal:no-obstacle"
+        normal_mode = "minimum" if shot_mode in {"normal", "minimum", "reflection"} else shot_mode
+        if normal_mode == "minimum":
+            selected_theory = solution["minimum_power"]
+            if selected_theory.get("status") != "reachable":
+                    raise RuntimeError("aim skipped: target has no usable -90--90 degree solution")
+            if not selected_theory["within_power_limit"]:
+                raise RuntimeError("aim skipped: minimum power is over 100")
+        elif normal_mode == "maximum":
+            maximum_solutions = solution["power_100"]["solutions"]
+            if not maximum_solutions:
+                raise RuntimeError("aim skipped: target has no reachable 100-power arc")
+            # A target can have exactly one valid fixed-power trajectory;
+            # when it does, that sole trajectory is also the highest arc.
+            selected_theory = {**max(maximum_solutions, key=lambda item: float(item["angle_degrees"])), "power": 100.0}
+        else:
+            raise ValueError("shot_mode must be 'normal', 'minimum', 'maximum', or 'reflection'")
+        selected = refine_normal_integer_shot(
+            self_x, self_y, target_x, target_y, wind_value, wind_direction or "right",
+            result.image_width, float(selected_theory["angle_degrees"]), float(selected_theory["power"]),
+        )
+        selected["mode"] = "normal"
+        if fallback:
+            selected["fallback"] = fallback
+    solution["selected"] = selected
     return solution, disc_click_point(
         self_x,
         self_y,
@@ -270,7 +295,7 @@ def aim_at_screen_position(
     resolution: str = "auto",
     click: Callable[[tuple[int, int]], None] = click_screen_point,
     manual_self: tuple[int, int] | None = None,
-    shot_mode: str = "minimum",
+    shot_mode: str = "normal",
     train_dir: Path | None = None,
 ) -> tuple[OutputPaths, dict[str, object], tuple[int, int]]:
     """Analyze a mouse target and click its calculated aim-disc point once.
@@ -285,12 +310,14 @@ def aim_at_screen_position(
         raise RuntimeError("aim skipped: press S to record self position first")
     if manual_self[1] >= GAME_CAPTURE_HEIGHT or target_y >= GAME_CAPTURE_HEIGHT:
         raise RuntimeError("aim skipped: self or target is below the saved 1800-pixel capture")
+    image = capture_client_area(hwnd)
     paths = process_capture(
-        capture_client_area(hwnd), output_dir, resolution=resolution, train_dir=train_dir,
+        image, output_dir, resolution=resolution, train_dir=train_dir,
         yolo_annotations=[(2, manual_self), (0, (target_x, target_y))],
     )
     solution, click_client = aim_click_for_target(
-        paths.result, target_x, target_y, manual_self=manual_self, shot_mode=shot_mode
+        paths.result, target_x, target_y, manual_self=manual_self, shot_mode=shot_mode,
+        geometry=detect_pink_obstacle_geometry(image),
     )
     if not (0 <= click_client[0] < client_size[0] and 0 <= click_client[1] < client_size[1]):
         raise RuntimeError("aim skipped: calculated aim-disc point is outside the game client area")

@@ -38,7 +38,7 @@ def _solution(
     """Restore an initial velocity vector from a known flight time."""
     velocity_x = (distance - 0.5 * wind * time * time) / time
     velocity_y = (height + 0.5 * gravity * time * time) / time
-    if velocity_x <= 0 or velocity_y < 0:
+    if velocity_x <= 0:
         raise ValueError("solution requires a non-positive local horizontal velocity")
     return {
         "direction": direction,
@@ -104,7 +104,7 @@ def solve_target(
 
     Screen coordinates are converted to a local ballistic frame: horizontal
     distance is always positive in the firing direction and positive height is
-    above the firing tank.  Angles therefore remain UI-ready 0--90 degrees.
+    above the firing tank. Angles use the UI-ready -90--90 degree range.
     """
     horizontal = target_x - self_x
     direction = "right" if horizontal >= 0 else "left"
@@ -199,6 +199,85 @@ def predicted_horizontal_displacement(
     firing_sign = 1.0 if firing_direction == "right" else -1.0
     wind = _wind_acceleration(wind_value, wind_direction, image_width)
     return firing_sign * speed * cos(angle) * flight_time + 0.5 * wind * flight_time**2
+
+
+def _integer_candidates(value: float, radius: int, minimum: int, maximum: int) -> range:
+    if radius < 0:
+        raise ValueError("radius must be non-negative")
+    center = round(value)
+    return range(max(minimum, center - radius), min(maximum, center + radius) + 1)
+
+
+def _position_at_time(
+    velocity_x: float, velocity_y: float, acceleration_x: float, gravity: float, time: float,
+) -> tuple[float, float]:
+    """Return physical-frame displacement, where positive y is upwards."""
+    return (
+        velocity_x * time + 0.5 * acceleration_x * time * time,
+        velocity_y * time - 0.5 * gravity * time * time,
+    )
+
+
+def _target_height_times(velocity_y: float, gravity: float, target_height: float) -> list[float]:
+    """Return strictly-positive times at which a trajectory reaches target_height."""
+    discriminant = velocity_y * velocity_y - 2.0 * gravity * target_height
+    if discriminant < 0:
+        return []
+    root = sqrt(discriminant)
+    return [time for time in ((velocity_y - root) / gravity, (velocity_y + root) / gravity) if time > 0]
+
+
+def refine_normal_integer_shot(
+    self_x: int | float,
+    self_y: int | float,
+    target_x: int | float,
+    target_y: int | float,
+    wind_value: int | float,
+    wind_direction: str,
+    image_width: int | float,
+    theory_angle: float,
+    theory_power: float,
+    radius: int = 2,
+) -> dict[str, object]:
+    """Choose the nearest playable integer normal shot by re-simulating it.
+
+    The analytic normal solver remains the source of the continuous candidate;
+    this function only searches a small integer neighbourhood around it.
+    """
+    if not -90 <= theory_angle <= 90 or theory_power < 0:
+        raise ValueError("theory controls must be within the aim disc")
+    horizontal = float(target_x - self_x)
+    direction = "right" if horizontal >= 0 else "left"
+    direction_sign = 1.0 if direction == "right" else -1.0
+    target_height = float(self_y - target_y)
+    scale = _scale(image_width)
+    gravity = GRAVITY_AT_REFERENCE * scale
+    speed_per_power = SPEED_PER_POWER_AT_REFERENCE * scale
+    wind = _wind_acceleration(wind_value, wind_direction, image_width)
+    candidates: list[dict[str, object]] = []
+    for angle_degrees in _integer_candidates(theory_angle, radius, -90, 90):
+        angle = radians(angle_degrees)
+        for power in _integer_candidates(theory_power, radius, 0, int(MAX_POWER)):
+            speed = speed_per_power * power
+            velocity_x = direction_sign * speed * cos(angle)
+            velocity_y = speed * sin(angle)
+            for time in _target_height_times(velocity_y, gravity, target_height):
+                dx, _ = _position_at_time(velocity_x, velocity_y, wind, gravity, time)
+                error = abs(dx - horizontal)
+                candidates.append({
+                    "angle_degrees": angle_degrees,
+                    "power": power,
+                    "direction": direction,
+                    "flight_time_seconds": time,
+                    "final_position": {"x": float(self_x) + dx, "y": float(target_y)},
+                    "target_error": error,
+                    "horizontal_error": float(self_x) + dx - float(target_x),
+                })
+    if not candidates:
+        raise RuntimeError("integer refinement found no playable normal trajectory")
+    return min(candidates, key=lambda item: (
+        float(item["target_error"]), int(item["power"]), int(item["angle_degrees"])
+    ))
 
 
 def format_ballistics(results: list[dict[str, object]]) -> str:

@@ -23,8 +23,8 @@ def disc_click_point(
     """Return the screen point on the aim disc for a shot setting."""
     if direction not in {"left", "right"}:
         raise ValueError("direction must be 'left' or 'right'")
-    if not _is_valid_number(angle_degrees) or not 0 <= angle_degrees <= 90:
-        raise ValueError("angle_degrees must be between 0 and 90")
+    if not _is_valid_number(angle_degrees) or not -90 <= angle_degrees <= 90:
+        raise ValueError("angle_degrees must be between -90 and 90")
     if not _is_valid_number(power) or not 0 <= power <= 100:
         raise ValueError("power must be between 0 and 100")
     if not _is_valid_number(image_width) or image_width <= 0:
