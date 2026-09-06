@@ -94,7 +94,7 @@ def main() -> None:
         origin, size = client_screen_geometry(hwnd)
         point = screen_to_client_point(win32api.GetCursorPos(), origin, size)
         if point[1] >= GAME_CAPTURE_HEIGHT:
-            raise RuntimeError("point is below the saved 1800-pixel capture")
+            raise RuntimeError("point is below the saved 2000-pixel capture")
         return point
 
     def current_annotations() -> list[tuple[int, tuple[int, int]]]:

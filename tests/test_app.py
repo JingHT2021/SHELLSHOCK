@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from shellshock_detector.app import (
+    GAME_CAPTURE_HEIGHT,
     aim_click_for_target,
     analyze_image,
     choose_window_handle,
@@ -20,6 +21,9 @@ from shellshock_detector.obstacle_geometry import ObstacleGeometry
 
 
 class AppTests(unittest.TestCase):
+    def test_game_capture_height_is_2000_physical_pixels(self):
+        self.assertEqual(GAME_CAPTURE_HEIGHT, 2000)
+
     def test_reflection_without_obstacles_falls_back_to_integer_normal_shot(self):
         result = DetectionResult(1920, 1080, Detection(1000, 800, 0.9), [], Wind(0, "right", 0.9), [])
 

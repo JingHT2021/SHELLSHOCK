@@ -33,17 +33,17 @@ class TankDetectionTests(unittest.TestCase):
         self.assertEqual(len(enemies), 3)
         self.assertEqual([item.x for item in enemies], [849, 1805, 2990])
 
-    def test_detects_tanks_up_to_fixed_1800_pixel_bottom_boundary(self):
+    def test_detects_tanks_up_to_fixed_2000_pixel_bottom_boundary(self):
         image = np.zeros((2160, 3840, 3), dtype=np.uint8)
-        cv2.rectangle(image, (2400, 1760), (2478, 1790), (0, 255, 0), -1)
-        cv2.rectangle(image, (800, 1750), (878, 1780), (0, 0, 255), -1)
-        cv2.rectangle(image, (1200, 1810), (1278, 1840), (0, 0, 255), -1)
+        cv2.rectangle(image, (2400, 1960), (2478, 1990), (0, 255, 0), -1)
+        cv2.rectangle(image, (800, 1950), (878, 1980), (0, 0, 255), -1)
+        cv2.rectangle(image, (1200, 2010), (1278, 2040), (0, 0, 255), -1)
 
         self_tank, enemies = detect_tanks(image)
 
         self.assertIsNotNone(self_tank)
-        self.assertEqual((self_tank.x, self_tank.y), (2439, 1775))
-        self.assertEqual([(item.x, item.y) for item in enemies], [(839, 1765)])
+        self.assertEqual((self_tank.x, self_tank.y), (2439, 1975))
+        self.assertEqual([(item.x, item.y) for item in enemies], [(839, 1965)])
 
     def test_detects_selected_green_tank_in_real_4k_scene(self):
         fixture = Path(__file__).parent / "fixtures" / "real_4k_scene.png"

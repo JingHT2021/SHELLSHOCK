@@ -6,9 +6,10 @@ import cv2
 import numpy as np
 
 from .models import Detection
+from .capture import GAME_CAPTURE_HEIGHT
 
 REFERENCE_WIDTH = 2560
-PLAYFIELD_BOTTOM = 1800
+PLAYFIELD_BOTTOM = GAME_CAPTURE_HEIGHT
 SELF_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "self_green.png"
 
 
@@ -28,7 +29,7 @@ def _detections_from_mask(mask: np.ndarray, image_width: int, image_height: int)
         # unrotated tank remains wide.  Keep both orientations.
         if area < minimum_area or not 0.75 <= aspect_ratio <= 5.0:
             continue
-        # Restrict detection to the top 1800 physical pixels.  This excludes
+        # Restrict detection to the top 2000 physical pixels.  This excludes
         # the bottom HUD while keeping tanks on low terrain detectable.
         if not 0 <= center_y < min(PLAYFIELD_BOTTOM, image_height):
             continue

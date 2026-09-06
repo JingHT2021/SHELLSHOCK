@@ -17,6 +17,7 @@ import win32con
 
 from .aiming import disc_click_point
 from .ballistics import refine_normal_integer_shot, solve_target
+from .capture import GAME_CAPTURE_HEIGHT
 from .dpi import client_capture_box, enable_per_monitor_dpi_awareness
 from .models import DetectionResult
 from .obstacle_geometry import ObstacleGeometry, detect_pink_obstacle_geometry
@@ -26,9 +27,6 @@ from .training_data import save_training_sample
 from .wind import detect_wind
 
 enable_per_monitor_dpi_awareness()
-
-GAME_CAPTURE_HEIGHT = 1800
-
 
 @dataclass(frozen=True)
 class OutputPaths:
@@ -309,7 +307,7 @@ def aim_at_screen_position(
     if manual_self is None:
         raise RuntimeError("aim skipped: press S to record self position first")
     if manual_self[1] >= GAME_CAPTURE_HEIGHT or target_y >= GAME_CAPTURE_HEIGHT:
-        raise RuntimeError("aim skipped: self or target is below the saved 1800-pixel capture")
+        raise RuntimeError("aim skipped: self or target is below the saved 2000-pixel capture")
     image = capture_client_area(hwnd)
     paths = process_capture(
         image, output_dir, resolution=resolution, train_dir=train_dir,

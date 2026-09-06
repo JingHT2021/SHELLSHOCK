@@ -17,7 +17,7 @@
 - `Esc`：退出脚本。
 - 未找到游戏窗口时，终端显示错误，不会截取桌面。
 
-所有截图只保留游戏画面 `y=0~1800`。原有输出仍保存为 `*_raw.png`、`*_result.json`、`*_annotated.png`；训练数据额外保存到 `train`。
+所有截图只保留游戏画面 `y=0~2000`。原有输出仍保存为 `*_raw.png`、`*_result.json`、`*_annotated.png`；训练数据额外保存到 `train`。
 
 ## JSON
 
