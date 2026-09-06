@@ -10,11 +10,18 @@ import cv2
 
 from shellshock_detector.obstacle_geometry import (
     detect_pink_obstacle_geometry,
+    detect_portal_geometry,
     draw_geometry_preview,
+    obstacle_yolo_detections,
+    portal_yolo_detections,
     remove_obstacle_yolo_labels,
     save_geometry,
+    yolo_objects,
 )
-from shellshock_detector.training_data import _draw_yolo_preview
+from shellshock_detector.training_data import (
+    _draw_yolo_preview,
+    append_yolo_obstacle_labels,
+)
 
 
 def annotate_geometry_directory(
@@ -25,7 +32,12 @@ def annotate_geometry_directory(
     dry_run: bool = False,
 ) -> dict[str, int]:
     """Use raw same-stem images for geometry while updating selected preview files."""
-    summary = {"images": 0, "circles": 0, "lines": 0, "removed_yolo_boxes": 0, "missing_raw": 0}
+    summary = {
+        "images": 0, "circles": 0, "lines": 0,
+        "added_circle": 0, "added_line": 0,
+        "added_portal_orange": 0, "added_portal_blue": 0,
+        "removed_yolo_boxes": 0, "missing_raw": 0,
+    }
     for preview_path in sorted(annotated_dir.glob("*.png")):
         summary["images"] += 1
         raw_image_path = raw_dir / preview_path.name
@@ -37,22 +49,45 @@ def annotate_geometry_directory(
         if image is None:
             summary["missing_raw"] += 1
             continue
-        geometry = detect_pink_obstacle_geometry(image)
+        obstacle_geometry = detect_pink_obstacle_geometry(image)
+        portals = detect_portal_geometry(image)
+        geometry = obstacle_geometry.__class__(
+            circles=obstacle_geometry.circles, lines=obstacle_geometry.lines, portals=portals
+        )
         summary["circles"] += len(geometry.circles)
         summary["lines"] += len(geometry.lines)
         original_labels = label_path.read_text(encoding="utf-8")
         cleaned_labels = remove_obstacle_yolo_labels(original_labels)
         summary["removed_yolo_boxes"] += sum(
-            1
-            for line in original_labels.splitlines()
-            if line.split() and line.split()[0] in {"3", "4"}
+            1 for line in original_labels.splitlines() if line.split() and line.split()[0] in {"3", "4"}
         )
+        detections = obstacle_yolo_detections(geometry, image.shape[1]) + portal_yolo_detections(portals)
+        merged_labels, _ = append_yolo_obstacle_labels(
+            cleaned_labels, detections, image.shape[1], image.shape[0]
+        )
+        old_count = len(cleaned_labels.splitlines())
+        for line in merged_labels.splitlines()[old_count:]:
+            class_id = int(line.split()[0])
+            if class_id == 3:
+                summary["added_circle"] += 1
+            elif class_id == 4:
+                summary["added_line"] += 1
+            elif class_id == 5:
+                summary["added_portal_orange"] += 1
+            elif class_id == 6:
+                summary["added_portal_blue"] += 1
         if dry_run:
             continue
-        if cleaned_labels != original_labels:
-            label_path.write_text(cleaned_labels, encoding="utf-8")
-        save_geometry(geometry_dir / f"{preview_path.stem}.json", geometry)
-        preview = draw_geometry_preview(_draw_yolo_preview(image, cleaned_labels), geometry)
+        if merged_labels != original_labels:
+            label_path.write_text(merged_labels, encoding="utf-8")
+        save_geometry(
+            geometry_dir / f"{preview_path.stem}.json",
+            geometry,
+            yolo_objects(merged_labels, image.shape[1], image.shape[0]),
+        )
+        preview = draw_geometry_preview(
+            _draw_yolo_preview(image, merged_labels, hidden_class_ids={3, 4, 5, 6}), geometry
+        )
         if not cv2.imwrite(str(preview_path), preview):
             raise RuntimeError(f"failed to write preview: {preview_path}")
     return summary

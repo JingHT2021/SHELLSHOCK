@@ -47,16 +47,16 @@ train/raw_cropped/20260905_230000.txt
 train/annotated/20260905_230000.png
 ```
 
-`.txt` 使用标准 YOLO Detection 的归一化格式。Q 记录的点生成 `self`（类别 2）框；E 记录的目标按 `enemy`（类别 0）框保存。默认框尺寸集中在 [training_data.py](shellshock_detector/training_data.py) 的 `DEFAULT_BOX_SIZE_AT_REFERENCE = (38.4, 28.8)`，按截图宽度缩放。类别为：`0 enemy`、`1 ally`、`2 self`、`3 obstacle_circle`、`4 obstacle_line`、`5 portal_orange`、`6 portal_blue`、`7 blackhole`。
+`.txt` 使用标准 YOLO Detection 的归一化格式。Q 记录的点生成 `self`（类别 2）框；E 记录的目标按 `enemy`（类别 0）框保存。默认框尺寸集中在 [training_data.py](shellshock_detector/training_data.py) 的 `DEFAULT_BOX_SIZE_AT_REFERENCE = (38.4, 28.8)`，按截图宽度缩放。类别为：`0 enemy`、`1 ally`、`2 self`、`3 obstacle_circle`、`4 obstacle_line`、`5 portal_orange`、`6 portal_blue`、`7 blackhole`。同名 `train/geometry/<timestamp>.json` 是该训练图的完整几何清单：`objects` 保存最终 YOLO 标签中的全部类别，`circles`/`lines` 保存粉色挡板的精确几何，`portals` 保存虫洞圆心、半径与蓝橙配对编号。
 
-可对已有训练预览图追加严格识别的粉色障碍物标注：
+可对已有训练预览图追加严格识别的粉色障碍物与蓝橙虫洞标注：
 
 ```powershell
-.\.venv\Scripts\python.exe annotate_pink_obstacles.py --dry-run
-.\.venv\Scripts\python.exe annotate_pink_obstacles.py
+.\.venv\Scripts\python.exe annotate_pink_geometry.py --dry-run
+.\.venv\Scripts\python.exe annotate_pink_geometry.py
 ```
 
-默认 HSV 阈值为严格的 `H=147..160, S>=180, V>=180`，只接受圆环或细长条形状，优先避免误标。先使用 `--dry-run` 查看候选数量；实际运行仅追加类别 3/4，且会跳过同类别、高重叠的已有框。
+粉色挡板 HSV 阈值为严格的 `(0,0,230)`–`(0,0,255)`；虫洞使用橙色 `(14,230,150)`–`(16,255,255)` 与蓝色 `(99,220,150)`–`(102,255,255)`。虫洞只接受有充分颜色圆周支持的圆拟合结果；半径接近的蓝橙圆写入相同 `pair_id`，未配对候选仍保留且 `pair_id` 为 `null`。先使用 `--dry-run` 查看候选数量；实际运行仅追加类别 3–6，保留原有 0/2 和已有 3/4 标签，并写入完整 JSON 与预览图。第二次运行不会重复追加标签。
 
 计算使用 1920×1080 标定并按截图宽度缩放；当前风力系数来自一条 94 风实测，结果应作为首发建议。不同武器、弹跳、地形碰撞及版本差异会偏离普通炮弹模型；用多次实际落点可再校准风系数。
 

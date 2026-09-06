@@ -26,7 +26,7 @@ class PinkObstacleConfig:
     circle_min_circularity: float = 0.72
     line_min_length: float = 55.0
     line_min_thickness: float = 2.0
-    line_max_thickness: float = 8.0
+    line_max_thickness: float = 32.0
     line_min_aspect_ratio: float = 3.0
     hough_circle_min_radius: float = 80.0
     hough_circle_min_support: float = 0.45
@@ -46,6 +46,8 @@ CLASS_NAMES = {
     2: "self",
     3: "obstacle_circle",
     4: "obstacle_line",
+    5: "portal_orange",
+    6: "portal_blue",
 }
 
 
@@ -220,11 +222,16 @@ def append_yolo_obstacle_labels(
     return existing_text + separator + "\n".join(additions) + "\n", len(additions)
 
 
-def _draw_yolo_preview(image: np.ndarray, label_text: str) -> np.ndarray:
+def _draw_yolo_preview(
+    image: np.ndarray, label_text: str, hidden_class_ids: set[int] | None = None
+) -> np.ndarray:
     preview = image.copy()
+    hidden_class_ids = hidden_class_ids or set()
     # These preview colours deliberately fall outside PinkObstacleConfig's HSV range.
     colors = {3: (0, 255, 255), 4: (255, 255, 0)}
     for class_id, (center_x, center_y, width, height) in _parse_yolo_boxes(label_text, image.shape[1], image.shape[0]):
+        if class_id in hidden_class_ids:
+            continue
         left = int(round(center_x - width / 2))
         top = int(round(center_y - height / 2))
         right = int(round(center_x + width / 2))

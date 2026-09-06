@@ -5,7 +5,7 @@ from shellshock_detector.obstacle_geometry import detect_pink_obstacle_geometry
 
 
 def _strict_pink() -> tuple[int, int, int]:
-    return tuple(map(int, cv2.cvtColor(np.uint8([[[153, 240, 255]]]), cv2.COLOR_HSV2BGR)[0, 0]))
+    return (255, 255, 255)
 
 
 def test_circle_is_reported_as_center_and_radius_without_line_fragments():

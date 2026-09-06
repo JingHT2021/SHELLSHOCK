@@ -14,6 +14,7 @@ from shellshock_detector.training_data import (
     detect_pink_obstacles,
     yolo_box_label_line,
     yolo_label_line,
+    _draw_yolo_preview,
 )
 
 
@@ -35,7 +36,7 @@ class TrainingDataTests(unittest.TestCase):
 class PinkObstacleDetectionTests(unittest.TestCase):
     @staticmethod
     def strict_pink() -> tuple[int, int, int]:
-        return tuple(map(int, cv2.cvtColor(np.uint8([[[153, 240, 255]]]), cv2.COLOR_HSV2BGR)[0, 0]))
+        return (255, 255, 255)
 
     def test_detects_a_strict_pink_circle_as_class_3(self):
         image = np.zeros((400, 600, 3), dtype=np.uint8)
@@ -67,8 +68,8 @@ class PinkObstacleDetectionTests(unittest.TestCase):
         cv2.circle(image, (180, 180), 70, red_pink, 5)
 
         self.assertEqual(detect_pink_obstacles(image), [])
-        self.assertEqual(PinkObstacleConfig().hsv_lower, (147, 180, 180))
-        self.assertEqual(PinkObstacleConfig().hsv_upper, (160, 255, 255))
+        self.assertEqual(PinkObstacleConfig().hsv_lower, (0, 0, 230))
+        self.assertEqual(PinkObstacleConfig().hsv_upper, (0, 0, 255))
 
 
 class ObstacleLabelMergeTests(unittest.TestCase):
@@ -91,12 +92,23 @@ class ObstacleLabelMergeTests(unittest.TestCase):
         self.assertEqual(again, merged)
 
 
+class PreviewRenderingTests(unittest.TestCase):
+    def test_can_hide_geometric_classes_from_yolo_box_preview(self):
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        labels = "2 0.100000 0.100000 0.100000 0.100000\n3 0.500000 0.500000 0.400000 0.400000\n"
+
+        preview = _draw_yolo_preview(image, labels, hidden_class_ids={3})
+
+        self.assertTrue(np.array_equal(preview[30, 30], image[30, 30]))
+        self.assertFalse(np.array_equal(preview[5, 5], image[5, 5]))
+
+
 class ObstacleSampleTests(unittest.TestCase):
     def test_sample_update_keeps_existing_labels_and_creates_preview(self):
         with TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             root = Path(directory)
             image = np.zeros((400, 600, 3), dtype=np.uint8)
-            pink = tuple(map(int, cv2.cvtColor(np.uint8([[[153, 240, 255]]]), cv2.COLOR_HSV2BGR)[0, 0]))
+            pink = (255, 255, 255)
             cv2.circle(image, (200, 200), 70, pink, 5)
             source = root / "sample.png"
             label = root / "sample.txt"

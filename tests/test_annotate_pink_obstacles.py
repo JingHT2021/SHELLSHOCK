@@ -15,7 +15,7 @@ def test_annotate_directory_reports_additions_without_replacing_existing_labels(
         annotated.mkdir()
         labels.mkdir()
         image = np.zeros((400, 600, 3), dtype=np.uint8)
-        pink = tuple(map(int, cv2.cvtColor(np.uint8([[[153, 240, 255]]]), cv2.COLOR_HSV2BGR)[0, 0]))
+        pink = (255, 255, 255)
         cv2.line(image, (80, 300), (360, 150), pink, 8)
         assert cv2.imwrite(str(annotated / "scene.png"), image)
         (labels / "scene.txt").write_text("0 0.500000 0.500000 0.020000 0.020000\n", encoding="utf-8")
