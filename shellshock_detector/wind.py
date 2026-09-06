@@ -113,26 +113,25 @@ def _find_panel_box(bgr: np.ndarray) -> tuple[int, int, int, int] | None:
         return None
     # The cloud and arrow can be disconnected; join near, aligned components.
     candidates.sort(key=lambda item: abs((item[0] + item[2] / 2) - bgr.shape[1] / 2))
+    minimum_width = 70 * (bgr.shape[1] / 2560)
     best: tuple[int, int, int, int] | None = None
     for first in candidates:
         for second in candidates:
-            if second[0] < first[0]:
-                continue
-            gap = second[0] - (first[0] + first[2])
-            aligned = abs((first[1] + first[3] / 2) - (second[1] + second[3] / 2)) < max(first[3], second[3])
+            left, right = sorted((first, second), key=lambda item: item[0])
+            gap = right[0] - (left[0] + left[2])
+            aligned = abs((left[1] + left[3] / 2) - (right[1] + right[3] / 2)) < max(left[3], right[3])
             if 0 <= gap <= 60 and aligned:
-                x = first[0]
-                y = min(first[1], second[1])
-                right = second[0] + second[2]
-                bottom = max(first[1] + first[3], second[1] + second[3])
-                best = (x, y, right - x, bottom - y)
+                x = left[0]
+                y = min(left[1], right[1])
+                panel_right = right[0] + right[2]
+                bottom = max(left[1] + left[3], right[1] + right[3])
+                if panel_right - x < minimum_width:
+                    continue
+                best = (x, y, panel_right - x, bottom - y)
                 break
         if best:
             break
-    if best is None:
-        return None
-    minimum_width = 70 * (bgr.shape[1] / 2560)
-    return best if best[2] >= minimum_width else None
+    return best
 
 
 def detect_wind(bgr: np.ndarray) -> tuple[Wind, str | None, tuple[int, int, int, int] | None]:

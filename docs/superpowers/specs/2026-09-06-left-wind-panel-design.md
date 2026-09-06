@@ -8,8 +8,11 @@ the cloud, without changing the existing right-arrow behavior.
 ## Design
 
 Panel discovery will pair the two nearby, top-centre HUD components regardless
-of their left-to-right order. The returned rectangle will span both components,
-so the existing direction and OCR routines continue to operate unchanged.
+of their left-to-right order. It will skip candidate pairs narrower than a
+scaled wind-panel width instead of returning early, so unrelated HUD digits do
+not prevent discovery of the real panel. The returned rectangle spans both
+components, so the existing direction and OCR routines continue to operate
+unchanged.
 
 ## Missing panels
 
