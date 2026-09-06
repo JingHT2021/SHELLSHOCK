@@ -6,6 +6,7 @@ __pycache__/
 # Test and tool caches
 .pytest_cache/
 .codex_tmp/
+.worktrees/
 pytest-cache-files-*/
 tmp*/
 
