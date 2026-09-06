@@ -5,7 +5,7 @@
 ## 启动
 
 ```powershell
-.\.venv\Scripts\python.exe detect_shellshock.py --output-dir output
+.\.venv\Scripts\python.exe detect_shellshock.py
 ```
 
 - `Q`：将当前鼠标的游戏客户区坐标记录为己方 `self`。
@@ -17,7 +17,7 @@
 - `Esc`：退出脚本。
 - 未找到游戏窗口时，终端显示错误，不会截取桌面。
 
-所有截图只保留游戏画面 `y=0~2000`。原有输出仍保存为 `*_raw.png`、`*_result.json`、`*_annotated.png`；训练数据额外保存到 `train`。
+所有截图只保留游戏画面 `y=0~2000`，且只保存训练数据到 `train`；不会创建 `output` 中的运行时截图、JSON 或标注图。
 
 ## JSON
 
@@ -71,7 +71,7 @@ train/annotated/20260905_230000.png
 默认 `--resolution auto`，直接按实际游戏窗口大小识别。也可选择 `2560x1600` 或 `3840x2160`：
 
 ```powershell
-.\.venv\Scripts\python.exe detect_shellshock.py --resolution 3840x2160 --output-dir output
+.\.venv\Scripts\python.exe detect_shellshock.py --resolution 3840x2160
 ```
 
 选择预设不会强制缩放截图；它仅核对实际捕获尺寸，并在 JSON 的 `errors` 中报告不匹配，避免把显示器分辨率与游戏窗口分辨率混淆。

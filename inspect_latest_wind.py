@@ -1,5 +1,9 @@
+from pathlib import Path
+
 import cv2
 
-image = cv2.imread("output/20260905_210750_raw.png")
-cv2.imwrite("output/latest_wind_top_debug.png", image[0:500, 1600:2250])
-cv2.imwrite("output/latest_wind_candidate_debug.png", image[300:420, 1840:2050])
+from shellshock_detector.wind import detect_wind
+
+latest = max(Path("train/raw_cropped").glob("*.png"), key=lambda path: path.stat().st_mtime)
+wind, error, box = detect_wind(cv2.imread(str(latest)))
+print(f"{latest}: wind={wind.value}/{wind.direction}; box={box}; error={error}")

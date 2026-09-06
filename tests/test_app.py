@@ -26,7 +26,7 @@ class AppTests(unittest.TestCase):
     def test_outside_client_aim_returns_solution_without_clicking(self):
         image = np.zeros((100, 100, 3), dtype=np.uint8)
         result = DetectionResult(100, 100, None, [], Wind(0, "right", 0.9), [])
-        paths = app.OutputPaths(Path("raw.png"), Path("result.json"), Path("annotated.png"), result)
+        paths = app.TrainingPaths(Path("raw.png"), Path("label.txt"), Path("annotated.png"), result)
         clicked: list[tuple[int, int]] = []
         solution = {"selected": {"mode": "normal", "angle_degrees": 35, "power": 28, "target_error": 0.0}}
 
@@ -38,7 +38,7 @@ class AppTests(unittest.TestCase):
             patch.object(app, "aim_click_for_target", return_value=(solution, (100, 50))),
         ):
             actual_paths, actual_solution, click_screen = app.aim_at_screen_position(
-                (50, 50), Path("output"), manual_self=(40, 50), click=clicked.append
+                (50, 50), manual_self=(40, 50), click=clicked.append
             )
 
         self.assertIs(actual_paths, paths)
@@ -150,17 +150,20 @@ class AppTests(unittest.TestCase):
     def test_usable_unmatched_foreground_window_is_rejected(self):
         self.assertIsNone(choose_window_handle(99, (0, 0, 3840, 2160), [], False))
 
-    def test_process_capture_writes_json_and_annotation(self):
+    def test_process_capture_writes_only_training_artifacts(self):
         image = np.zeros((1600, 2560, 3), dtype=np.uint8)
         cv2.rectangle(image, (1650, 1200), (1700, 1230), (0, 255, 0), -1)
         cv2.rectangle(image, (1100, 1180), (1150, 1210), (0, 0, 255), -1)
 
         with TemporaryDirectory(dir=Path.cwd()) as directory:
-            paths = process_capture(image, Path(directory), now=lambda: "20260904_120000")
+            train_dir = Path(directory) / "train"
+            paths = process_capture(image, train_dir, now=lambda: "20260904_120000")
 
-            self.assertEqual(paths.json_path.name, "20260904_120000_result.json")
-            self.assertTrue(paths.json_path.exists())
+            self.assertEqual(paths.raw_path, train_dir / "raw_cropped" / "20260904_120000.png")
+            self.assertTrue(paths.raw_path.exists())
+            self.assertTrue((train_dir / "raw_cropped" / "20260904_120000.txt").exists())
             self.assertTrue(paths.annotated_path.exists())
+            self.assertFalse((train_dir / "20260904_120000_raw.png").exists())
             self.assertEqual(paths.result.ballistics, [])
 
     def test_full_scene_keeps_wind_detection_without_tank_detection(self):

@@ -76,7 +76,6 @@ def format_aim_report(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze ShellShock Live on the R hotkey.")
-    parser.add_argument("--output-dir", type=Path, default=Path("output"), help="Directory for raw, JSON, and annotated files.")
     parser.add_argument(
         "--resolution",
         choices=RESOLUTION_PRESETS,
@@ -84,7 +83,6 @@ def main() -> None:
         help="Expected game-window resolution; auto uses the captured client size.",
     )
     args = parser.parse_args()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
     train_dir = Path("train")
     manual_self: tuple[int, int] | None = None
     manual_target: tuple[int, int] | None = None
@@ -108,11 +106,8 @@ def main() -> None:
 
     def run_capture() -> None:
         try:
-            paths = capture_once(
-                args.output_dir, args.resolution, train_dir=train_dir,
-                yolo_annotations=current_annotations(),
-            )
-            print(f"Saved: {paths.raw_path}, {paths.json_path}, {paths.annotated_path}")
+            paths = capture_once(args.resolution, train_dir=train_dir, yolo_annotations=current_annotations())
+            print(f"Saved training data: {paths.raw_path}, {paths.label_path}, {paths.annotated_path}")
             print("Wind: " + (f"{paths.result.wind.value} {paths.result.wind.direction}" if paths.result.wind.value is not None else "not found (T uses 0 wind)"))
         except RuntimeError as error:
             print(f"Capture skipped: {error}")
@@ -150,7 +145,7 @@ def main() -> None:
         try:
             manual_target = mouse_client_point()
             paths, solution, click_point = aim_at_screen_position(
-                win32api.GetCursorPos(), args.output_dir, args.resolution,
+                win32api.GetCursorPos(), args.resolution,
                 manual_self=manual_self, shot_mode=shot_mode, train_dir=train_dir,
             )
             selected = solution["selected"]
@@ -165,7 +160,7 @@ def main() -> None:
             if click_point is None:
                 print("Aim not clicked: calculated aim-disc point is outside the game client area")
             print(f"Target {manual_target}  |  mode={shot_mode}")
-            print(f"Saved: {paths.raw_path}, {paths.json_path}, {paths.annotated_path}")
+            print(f"Saved training data: {paths.raw_path}, {paths.label_path}, {paths.annotated_path}")
         except (RuntimeError, ValueError) as error:
             print(f"Aim skipped: {error}")
 

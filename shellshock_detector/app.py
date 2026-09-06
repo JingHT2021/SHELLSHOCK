@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import ctypes
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,9 +28,9 @@ from .wind import detect_wind
 enable_per_monitor_dpi_awareness()
 
 @dataclass(frozen=True)
-class OutputPaths:
+class TrainingPaths:
     raw_path: Path
-    json_path: Path
+    label_path: Path
     annotated_path: Path
     result: DetectionResult
 
@@ -182,22 +181,13 @@ def _annotate(image: np.ndarray, result: DetectionResult, wind_box: tuple[int, i
     return annotated
 
 
-def _write_png(path: Path, image: np.ndarray) -> None:
-    success, encoded = cv2.imencode(".png", image)
-    if not success:
-        raise RuntimeError("failed to encode output image")
-    path.write_bytes(encoded.tobytes())
-
-
 def process_capture(
     image: np.ndarray,
-    output_dir: Path,
+    train_dir: Path,
     now: Callable[[], str] | None = None,
     resolution: str = "auto",
-    train_dir: Path | None = None,
     yolo_annotations: list[tuple[int, tuple[int, int]]] | None = None,
-) -> OutputPaths:
-    output_dir.mkdir(parents=True, exist_ok=True)
+) -> TrainingPaths:
     timestamp = now() if now else datetime.now().strftime("%Y%m%d_%H%M%S")
     result, wind_box = analyze_image(image)
     warning = resolution_warning(resolution, image.shape[1], image.shape[0])
@@ -207,15 +197,8 @@ def process_capture(
             warning = None
     if warning:
         result.errors.append(warning)
-    raw_path = output_dir / f"{timestamp}_raw.png"
-    json_path = output_dir / f"{timestamp}_result.json"
-    annotated_path = output_dir / f"{timestamp}_annotated.png"
-    _write_png(raw_path, image)
-    _write_png(annotated_path, _annotate(image, result, wind_box))
-    json_path.write_text(json.dumps(result.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-    if train_dir is not None:
-        save_training_sample(image, train_dir, timestamp, yolo_annotations or [])
-    return OutputPaths(raw_path, json_path, annotated_path, result)
+    raw_path, label_path, annotated_path = save_training_sample(image, train_dir, timestamp, yolo_annotations or [])
+    return TrainingPaths(raw_path, label_path, annotated_path, result)
 
 
 def find_game_window() -> int:
@@ -289,13 +272,12 @@ def click_screen_point(point: tuple[int, int]) -> None:
 
 def aim_at_screen_position(
     screen_target: tuple[int, int],
-    output_dir: Path,
     resolution: str = "auto",
     click: Callable[[tuple[int, int]], None] = click_screen_point,
     manual_self: tuple[int, int] | None = None,
     shot_mode: str = "normal",
-    train_dir: Path | None = None,
-) -> tuple[OutputPaths, dict[str, object], tuple[int, int] | None]:
+    train_dir: Path = Path("train"),
+) -> tuple[TrainingPaths, dict[str, object], tuple[int, int] | None]:
     """Analyze a mouse target and click its calculated aim-disc point once.
 
     This is intentionally guarded: any invalid target or unavailable ballistic
@@ -310,7 +292,7 @@ def aim_at_screen_position(
         raise RuntimeError("aim skipped: self or target is below the saved 2000-pixel capture")
     image = capture_client_area(hwnd)
     paths = process_capture(
-        image, output_dir, resolution=resolution, train_dir=train_dir,
+        image, train_dir, resolution=resolution,
         yolo_annotations=[(2, manual_self), (0, (target_x, target_y))],
     )
     solution, click_client = aim_click_for_target(
@@ -326,12 +308,11 @@ def aim_at_screen_position(
 
 
 def capture_once(
-    output_dir: Path,
     resolution: str = "auto",
-    train_dir: Path | None = None,
+    train_dir: Path = Path("train"),
     yolo_annotations: list[tuple[int, tuple[int, int]]] | None = None,
-) -> OutputPaths:
+) -> TrainingPaths:
     return process_capture(
-        capture_client_area(find_game_window()), output_dir, resolution=resolution,
-        train_dir=train_dir, yolo_annotations=yolo_annotations,
+        capture_client_area(find_game_window()), train_dir, resolution=resolution,
+        yolo_annotations=yolo_annotations,
     )
