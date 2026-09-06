@@ -56,7 +56,7 @@ def describe_selected_shot(selected: dict[str, object]) -> str:
 
 def format_aim_report(
     self_position: tuple[int, int],
-    aim_click: tuple[int, int],
+    aim_click: tuple[int, int] | None,
     selected: dict[str, object],
     wind_value: int | None,
     wind_direction: str | None,
@@ -66,7 +66,8 @@ def format_aim_report(
     mode = str(selected.get("mode", "normal"))
     if selected.get("fallback"):
         mode += " (fallback)"
-    position_line = f"SELF  {self_position}  →  AIM CLICK  {aim_click}  |  WIND {wind}  |  MODE {mode}"
+    aim_label = f"AIM CLICK  {aim_click}" if aim_click is not None else "AIM CLICK OUTSIDE CLIENT"
+    position_line = f"SELF  {self_position}  →  {aim_label}  |  WIND {wind}  |  MODE {mode}"
     # ANSI bold red is supported by Windows Terminal and most modern consoles;
     # reset immediately so paths and later logs keep their normal colors.
     shot_line = f"\x1b[1;31m{describe_selected_shot(selected)}\x1b[0m"
@@ -161,6 +162,8 @@ def main() -> None:
                     paths.result.wind.value, paths.result.wind.direction,
                 )
             )
+            if click_point is None:
+                print("Aim not clicked: calculated aim-disc point is outside the game client area")
             print(f"Target {manual_target}  |  mode={shot_mode}")
             print(f"Saved: {paths.raw_path}, {paths.json_path}, {paths.annotated_path}")
         except (RuntimeError, ValueError) as error:

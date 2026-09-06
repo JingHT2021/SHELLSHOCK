@@ -295,7 +295,7 @@ def aim_at_screen_position(
     manual_self: tuple[int, int] | None = None,
     shot_mode: str = "normal",
     train_dir: Path | None = None,
-) -> tuple[OutputPaths, dict[str, object], tuple[int, int]]:
+) -> tuple[OutputPaths, dict[str, object], tuple[int, int] | None]:
     """Analyze a mouse target and click its calculated aim-disc point once.
 
     This is intentionally guarded: any invalid target or unavailable ballistic
@@ -318,7 +318,7 @@ def aim_at_screen_position(
         geometry=detect_pink_obstacle_geometry(image),
     )
     if not (0 <= click_client[0] < client_size[0] and 0 <= click_client[1] < client_size[1]):
-        raise RuntimeError("aim skipped: calculated aim-disc point is outside the game client area")
+        return paths, solution, None
     ensure_game_window_is_active(hwnd)
     click_screen = (client_origin[0] + click_client[0], client_origin[1] + click_client[1])
     click(click_screen)

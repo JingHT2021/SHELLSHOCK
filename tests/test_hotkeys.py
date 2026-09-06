@@ -20,3 +20,22 @@ def test_aim_report_groups_self_and_click_and_highlights_power_angle():
     assert "Normal: (power=28, angle=35)  target_error=0.01px" in text
     assert "landing=left 9.14px" in text
     assert "\x1b[1;31m" in text
+
+
+def test_aim_report_keeps_power_and_angle_when_click_is_outside_client():
+    text = format_aim_report(
+        (2537, 802),
+        None,
+        {
+            "mode": "normal",
+            "angle_degrees": 35,
+            "power": 28,
+            "target_error": 0.01,
+            "horizontal_error": 0.0,
+        },
+        wind_value=11,
+        wind_direction="right",
+    )
+
+    assert "AIM CLICK OUTSIDE CLIENT" in text
+    assert "Normal: (power=28, angle=35)" in text

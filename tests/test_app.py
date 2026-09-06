@@ -1,10 +1,12 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import cv2
 import numpy as np
 
+import shellshock_detector.app as app
 from shellshock_detector.app import (
     GAME_CAPTURE_HEIGHT,
     aim_click_for_target,
@@ -21,6 +23,29 @@ from shellshock_detector.obstacle_geometry import ObstacleGeometry
 
 
 class AppTests(unittest.TestCase):
+    def test_outside_client_aim_returns_solution_without_clicking(self):
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        result = DetectionResult(100, 100, None, [], Wind(0, "right", 0.9), [])
+        paths = app.OutputPaths(Path("raw.png"), Path("result.json"), Path("annotated.png"), result)
+        clicked: list[tuple[int, int]] = []
+        solution = {"selected": {"mode": "normal", "angle_degrees": 35, "power": 28, "target_error": 0.0}}
+
+        with (
+            patch.object(app, "find_game_window", return_value=123),
+            patch.object(app, "client_screen_geometry", return_value=((0, 0), (100, 100))),
+            patch.object(app, "capture_client_area", return_value=image),
+            patch.object(app, "process_capture", return_value=paths),
+            patch.object(app, "aim_click_for_target", return_value=(solution, (100, 50))),
+        ):
+            actual_paths, actual_solution, click_screen = app.aim_at_screen_position(
+                (50, 50), Path("output"), manual_self=(40, 50), click=clicked.append
+            )
+
+        self.assertIs(actual_paths, paths)
+        self.assertIs(actual_solution, solution)
+        self.assertIsNone(click_screen)
+        self.assertEqual(clicked, [])
+
     def test_game_capture_height_is_2000_physical_pixels(self):
         self.assertEqual(GAME_CAPTURE_HEIGHT, 2000)
 
