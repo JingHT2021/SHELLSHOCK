@@ -1,8 +1,15 @@
 from dataclasses import FrozenInstanceError
 
+import cv2
+import numpy as np
 import pytest
 
-from shellshock_detector.world_geometry import DetectionBox, World, build_world
+from shellshock_detector.world_geometry import (
+    DetectionBox,
+    World,
+    build_world,
+    build_world_from_image,
+)
 
 
 def test_build_world_pairs_nearest_equal_radius_orange_and_blue_portals():
@@ -109,3 +116,63 @@ def test_world_converts_caller_supplied_collections_to_immutable_tuples():
     world = World(circles=[])
 
     assert world.circles == ()
+
+
+def test_build_world_from_image_refines_yolo_circle_and_preserves_self_and_portals():
+    image = np.zeros((800, 1200, 3), dtype=np.uint8)
+    cv2.circle(image, (500, 360), 150, (255, 255, 255), 8)
+    boxes = [
+        DetectionBox("self", 100, 200, 40, 30, 0.95),
+        DetectionBox("obstacle_circle", 330, 190, 340, 340, 0.9),
+        DetectionBox("portal_orange", 180, 280, 80, 80, 0.90),
+        DetectionBox("portal_blue", 700, 310, 82, 82, 0.91),
+    ]
+
+    world = build_world_from_image(boxes, image)
+
+    assert world.self_position == (120, 215)
+    assert len(world.portal_pairs) == 1
+    assert len(world.circles) == 1
+    assert world.circles[0].center == pytest.approx((500, 360), abs=4)
+    assert world.circles[0].radius == pytest.approx(150, abs=5)
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [((160, 500), (480, 500)), ((300, 620), (300, 300)), ((120, 650), (420, 470))],
+)
+def test_build_world_from_image_refines_yolo_line_endpoints(start, end):
+    image = np.zeros((800, 1200, 3), dtype=np.uint8)
+    cv2.line(image, start, end, (255, 255, 255), 10)
+    left, right = sorted((start[0], end[0]))
+    top, bottom = sorted((start[1], end[1]))
+
+    world = build_world_from_image(
+        [DetectionBox("obstacle_line", left - 20, top - 20, right - left + 40, bottom - top + 40, 0.9)],
+        image,
+    )
+
+    assert len(world.lines) == 1
+    actual = world.lines[0]
+    assert min(np.hypot(actual.start[0] - start[0], actual.start[1] - start[1]), np.hypot(actual.end[0] - start[0], actual.end[1] - start[1])) <= 7
+    assert min(np.hypot(actual.start[0] - end[0], actual.start[1] - end[1]), np.hypot(actual.end[0] - end[0], actual.end[1] - end[1])) <= 7
+
+
+def test_build_world_from_image_discards_obstacle_candidate_without_strict_hsv_geometry():
+    image = np.zeros((400, 600, 3), dtype=np.uint8)
+
+    world = build_world_from_image(
+        [
+            DetectionBox("self", 10, 20, 20, 20, 0.9),
+            DetectionBox("obstacle_circle", 100, 100, 160, 160, 0.9),
+            DetectionBox("obstacle_line", 300, 100, 180, 20, 0.9),
+            DetectionBox("portal_orange", 300, 200, 80, 80, 0.9),
+            DetectionBox("portal_blue", 450, 200, 80, 80, 0.9),
+        ],
+        image,
+    )
+
+    assert world.self_position == (20, 30)
+    assert len(world.portal_pairs) == 1
+    assert world.circles == ()
+    assert world.lines == ()

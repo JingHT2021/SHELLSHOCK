@@ -6,15 +6,52 @@ from math import cos, radians, sin
 from .ballistics import GRAVITY_AT_REFERENCE, REFERENCE_WIDTH, SPEED_PER_POWER_AT_REFERENCE, WIND_ACCELERATION_PER_UNIT_AT_REFERENCE, solve_target
 from .projectile_events import advance_through_world
 from .world_geometry import Point, World
-from .wormhole_solver import solve_wormhole_integer_shot
+
+
+def _solve_combined_integer_shot(source: Point, target: Point, world: World, wind_value: float, wind_direction: str, image_width: int, mode: str) -> dict[str, object]:
+    """Search integer controls while replaying portals and at most one reflection."""
+    scale = image_width / REFERENCE_WIDTH
+    wind = wind_value * WIND_ACCELERATION_PER_UNIT_AT_REFERENCE * scale * (1 if wind_direction == "right" else -1)
+    is_wormhole = mode in {"wormhole", "wormhole_low_arc", "wormhole_high_arc"}
+    high_arc = mode == "wormhole_high_arc"
+    power_values = range(100, 0, -1) if high_arc else range(1, 101)
+    angle_values = range(90, -1, -1) if high_arc else range(0, 91)
+    for power in power_values:
+        speed = power * SPEED_PER_POWER_AT_REFERENCE * scale
+        for angle_degrees in angle_values:
+            angle = radians(angle_degrees)
+            for direction, sign in (("left", -1), ("right", 1)):
+                replay = advance_through_world(
+                    source, (sign * speed * cos(angle), -speed * sin(angle)),
+                    (wind, GRAVITY_AT_REFERENCE * scale), world, 12.0, target, 24 * scale,
+                    max_reflections=1,
+                )
+                if replay.terminal_kind != "target":
+                    continue
+                if is_wormhole and replay.portal_count < 1:
+                    continue
+                if mode == "reflection" and replay.reflection_count != 1:
+                    continue
+                reflection_events = [event for event in replay.events if event.kind == "reflection"]
+                return {
+                    "status": "reachable", "mode": mode, "direction": direction,
+                    "angle_degrees": angle_degrees, "power": power,
+                    "portal_count": replay.portal_count, "reflection_count": replay.reflection_count,
+                    "events": [event.kind for event in replay.events],
+                    "reflection_point": reflection_events[0].point if reflection_events else None,
+                    "reflection_obstacle": (
+                        {"kind": reflection_events[0].obstacle_kind, "index": reflection_events[0].obstacle_index}
+                        if reflection_events else None
+                    ),
+                }
+    return {"status": "unreachable", "reason": "no-verified-combined-wormhole-shot" if is_wormhole else "no-verified-combined-reflection-shot"}
 
 
 def solve_integer_shot(source: Point, target: Point, world: World, wind_value: float, wind_direction: str, image_width: int, mode: str, force_power: int | None = None) -> dict[str, object]:
     if mode in {"wormhole", "wormhole_low_arc", "wormhole_high_arc"} and not world.portal_pairs:
         return {"status": "unreachable", "reason": "no-portal-pair"}
-    if mode in {"wormhole", "wormhole_low_arc", "wormhole_high_arc"}:
-        return solve_wormhole_integer_shot(source, target, world, wind_value, wind_direction, image_width,
-                                           arc_preference="high" if mode == "wormhole_high_arc" else "low")
+    if mode in {"wormhole", "wormhole_low_arc", "wormhole_high_arc", "reflection"}:
+        return _solve_combined_integer_shot(source, target, world, wind_value, wind_direction, image_width, mode)
     scale = image_width / REFERENCE_WIDTH
     wind = wind_value * WIND_ACCELERATION_PER_UNIT_AT_REFERENCE * scale * (1 if wind_direction == "right" else -1)
     if mode in {"normal", "low_arc", "high_arc"}:

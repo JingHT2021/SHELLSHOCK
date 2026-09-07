@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import hypot
 from typing import Literal
 
+import numpy as np
+
+from shellshock_detector.obstacle_geometry import detect_pink_obstacle_geometry
 
 MAX_PORTAL_RADIUS_RELATIVE_ERROR = 0.15
 
@@ -182,4 +186,90 @@ def build_world(boxes: list[DetectionBox], image_width: int, image_height: int) 
         lines=tuple(lines),
         portal_pairs=pairs,
         unpaired_portals=len(oranges) + len(blues) - 2 * len(pairs),
+    )
+
+
+def _candidate_roi(box: DetectionBox, image: np.ndarray) -> tuple[np.ndarray, int, int, int, int] | None:
+    clipped = _clip_box(box, image.shape[1], image.shape[0])
+    if clipped is None:
+        return None
+    left, top, width, height = clipped
+    x0, y0 = int(left), int(top)
+    x1 = int(np.ceil(left + width))
+    y1 = int(np.ceil(top + height))
+    roi = image[y0:y1, x0:x1]
+    if roi.size == 0:
+        return None
+    return roi, x0, y0, x1, y1
+
+
+def _guided_obstacle_geometry(box: DetectionBox, image: np.ndarray):
+    """Run the shared fitter at full-screen scale, with pixels limited to one YOLO ROI."""
+    candidate = _candidate_roi(box, image)
+    if candidate is None:
+        return None
+    roi, x0, y0, x1, y1 = candidate
+    guided = np.zeros_like(image)
+    guided[y0:y1, x0:x1] = roi
+    return detect_pink_obstacle_geometry(guided)
+
+
+def _refined_circle(box: DetectionBox, image: np.ndarray) -> CircleObstacle | None:
+    geometry = _guided_obstacle_geometry(box, image)
+    if geometry is None:
+        return None
+    circles = geometry.circles
+    if not circles:
+        return None
+    expected_x, expected_y = box.x + box.width / 2, box.y + box.height / 2
+    circle = min(circles, key=lambda item: hypot(item.center[0] - expected_x, item.center[1] - expected_y))
+    return CircleObstacle(circle.center, circle.radius)
+
+
+def _refined_line(box: DetectionBox, image: np.ndarray) -> LineObstacle | None:
+    geometry = _guided_obstacle_geometry(box, image)
+    if geometry is None:
+        return None
+    lines = geometry.lines
+    if not lines:
+        return None
+    expected_x, expected_y = box.x + box.width / 2, box.y + box.height / 2
+    line = min(
+        lines,
+        key=lambda item: hypot(
+            (item.start[0] + item.end[0]) / 2 - expected_x,
+            (item.start[1] + item.end[1]) / 2 - expected_y,
+        ),
+    )
+    return LineObstacle(line.start, line.end)
+
+
+def build_world_from_image(boxes: list[DetectionBox], image: np.ndarray) -> World:
+    """Build a YOLO-guided world whose reflective obstacles use strict HSV geometry."""
+    if image is None or image.size == 0:
+        raise ValueError("image must not be empty")
+
+    image_height, image_width = image.shape[:2]
+    non_obstacles = [box for box in boxes if box.name not in {"obstacle_circle", "obstacle_line"}]
+    base = build_world(non_obstacles, image_width, image_height)
+    circles: list[CircleObstacle] = []
+    lines: list[LineObstacle] = []
+    for box in boxes:
+        if box.name == "obstacle_circle":
+            circle = _refined_circle(box, image)
+            if circle is not None:
+                circles.append(circle)
+        elif box.name == "obstacle_line":
+            line = _refined_line(box, image)
+            if line is not None:
+                lines.append(line)
+
+    return World(
+        image_width=base.image_width,
+        image_height=base.image_height,
+        self_position=base.self_position,
+        circles=tuple(circles),
+        lines=tuple(lines),
+        portal_pairs=base.portal_pairs,
+        unpaired_portals=base.unpaired_portals,
     )
