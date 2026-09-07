@@ -21,8 +21,11 @@ DEFAULT_WEIGHTS = Path("train/runs/shellshock_yolo11n_cv65_final_all/weights/bes
 EXIT_HOTKEY = "delete"
 
 
-def select_mode(key: str) -> str:
-    return {"page up": "high_arc", "page down": "low_arc"}.get(key, key)
+def select_mode(key: str, current_mode: str = "normal") -> str:
+    if key not in {"page up", "page down"}:
+        return key
+    arc = "high_arc" if key == "page up" else "low_arc"
+    return f"wormhole_{arc}" if current_mode.startswith("wormhole") else arc
 
 
 def format_aim_report(mode: str, solution: dict[str, object], wind_value: int | float | None, wind_direction: str | None, click: tuple[int, int]) -> str:
@@ -81,10 +84,10 @@ def main() -> None:
 
     keyboard.add_hotkey("e", aim)
     keyboard.add_hotkey("t", lambda: choose("normal"))
-    keyboard.add_hotkey("h", lambda: choose("wormhole"))
+    keyboard.add_hotkey("h", lambda: choose("wormhole_low_arc"))
     keyboard.add_hotkey("r", lambda: choose("reflection"))
-    keyboard.add_hotkey("page up", lambda: choose(select_mode("page up")))
-    keyboard.add_hotkey("page down", lambda: choose(select_mode("page down")))
+    keyboard.add_hotkey("page up", lambda: choose(select_mode("page up", mode)))
+    keyboard.add_hotkey("page down", lambda: choose(select_mode("page down", mode)))
     keyboard.add_hotkey(EXIT_HOTKEY, lambda: print("Exiting YOLO aim...", flush=True))
     print("Ready: E=aim, T=normal, H=wormhole, R=reflection, PageUp=high arc, PageDown=low arc, Del=quit")
     keyboard.wait(EXIT_HOTKEY)

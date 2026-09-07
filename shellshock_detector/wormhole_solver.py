@@ -157,7 +157,9 @@ def _portal_sequence(world: World, replay: object) -> tuple[str, ...]:
     return tuple(sequence)
 
 
-def solve_wormhole_integer_shot(source: Point, target: Point, world: World, wind_value: float, wind_direction: str, image_width: int) -> dict[str, object]:
+def solve_wormhole_integer_shot(source: Point, target: Point, world: World, wind_value: float, wind_direction: str, image_width: int, *, arc_preference: str = "low") -> dict[str, object]:
+    if arc_preference not in {"low", "high"}:
+        raise ValueError("arc_preference must be 'low' or 'high'")
     if not world.portal_pairs:
         return {"status": "unreachable", "reason": "no-portal-pair"}
     scale = image_width / REFERENCE_WIDTH
@@ -171,11 +173,13 @@ def solve_wormhole_integer_shot(source: Point, target: Point, world: World, wind
             shift = (sum(item.shift[0] for item in planned), sum(item.shift[1] for item in planned))
             virtual = (target[0] - shift[0], target[1] - shift[1])
             minimum = ceil(minimum_ballistic_speed(source, virtual, acceleration) / speed_per_power)
-            # Integer controls only need a tight neighbourhood above the
-            # continuous lower bound; larger powers cannot be lowest-power
-            # candidates and make four-pair maps unnecessarily expensive.
-            ceiling = min(100, minimum + 1, int(best["power"]) if best else 100)
-            for power in range(max(1, minimum), ceiling + 1):
+            # The virtual target can be below the source even though a real
+            # route must first climb into an upper portal.  Its minimum-power
+            # direct solution is therefore not a safe upper bound: search all
+            # playable powers, pruning only after a verified lower-power shot.
+            powers = (range(max(1, minimum), min(100, int(best["power"]) if best else 100) + 1)
+                      if arc_preference == "low" else range(100, max(1, minimum) - 1, -1))
+            for power in powers:
                 trajectories = cache.setdefault((shift[0], shift[1], power), solve_ballistic_for_speed(source, virtual, acceleration, power * speed_per_power))  # type: ignore[arg-type]
                 for trajectory in trajectories:
                     first_entry = first_circle_entry_time(trajectory, planned[0].entry.center, planned[0].entry.radius, 0.0, trajectory.flight_time)
@@ -193,8 +197,12 @@ def solve_wormhole_integer_shot(source: Point, target: Point, world: World, wind
                         if replay.terminal_kind != "target" or sequence != wanted:
                             continue
                         candidate = {"status": "reachable", "direction": direction, "angle_degrees": angle, "power": power, "portal_count": len(sequence), "portal_sequence": list(sequence), "events": [event.kind for event in replay.events]}
-                        if best is None or (power, len(sequence), angle, direction) < (int(best["power"]), int(best["portal_count"]), int(best["angle_degrees"]), str(best["direction"])):
+                        candidate_key = ((power, len(sequence), angle, direction) if arc_preference == "low"
+                                         else (-power, -angle, len(sequence), direction))
+                        best_key = ((int(best["power"]), int(best["portal_count"]), int(best["angle_degrees"]), str(best["direction"]))
+                                    if arc_preference == "low" else (-int(best["power"]), -int(best["angle_degrees"]), int(best["portal_count"]), str(best["direction"]))) if best else None
+                        if best_key is None or candidate_key < best_key:
                             best = candidate
-                if best and power >= int(best["power"]):
+                if arc_preference == "low" and best and power >= int(best["power"]):
                     break
     return best or {"status": "unreachable", "reason": "no-verified-wormhole-shot"}

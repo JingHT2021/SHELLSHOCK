@@ -10,10 +10,11 @@ from .wormhole_solver import solve_wormhole_integer_shot
 
 
 def solve_integer_shot(source: Point, target: Point, world: World, wind_value: float, wind_direction: str, image_width: int, mode: str, force_power: int | None = None) -> dict[str, object]:
-    if mode == "wormhole" and not world.portal_pairs:
+    if mode in {"wormhole", "wormhole_low_arc", "wormhole_high_arc"} and not world.portal_pairs:
         return {"status": "unreachable", "reason": "no-portal-pair"}
-    if mode == "wormhole":
-        return solve_wormhole_integer_shot(source, target, world, wind_value, wind_direction, image_width)
+    if mode in {"wormhole", "wormhole_low_arc", "wormhole_high_arc"}:
+        return solve_wormhole_integer_shot(source, target, world, wind_value, wind_direction, image_width,
+                                           arc_preference="high" if mode == "wormhole_high_arc" else "low")
     scale = image_width / REFERENCE_WIDTH
     wind = wind_value * WIND_ACCELERATION_PER_UNIT_AT_REFERENCE * scale * (1 if wind_direction == "right" else -1)
     if mode in {"normal", "low_arc", "high_arc"}:
