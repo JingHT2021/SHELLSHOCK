@@ -29,9 +29,9 @@ enable_per_monitor_dpi_awareness()
 
 @dataclass(frozen=True)
 class TrainingPaths:
-    raw_path: Path
-    label_path: Path
-    annotated_path: Path
+    raw_path: Path | None
+    label_path: Path | None
+    annotated_path: Path | None
     result: DetectionResult
 
 
@@ -187,6 +187,7 @@ def process_capture(
     now: Callable[[], str] | None = None,
     resolution: str = "auto",
     yolo_annotations: list[tuple[int, tuple[int, int]]] | None = None,
+    save_training_data: bool = True,
 ) -> TrainingPaths:
     timestamp = now() if now else datetime.now().strftime("%Y%m%d_%H%M%S")
     result, wind_box = analyze_image(image)
@@ -197,6 +198,8 @@ def process_capture(
             warning = None
     if warning:
         result.errors.append(warning)
+    if not save_training_data:
+        return TrainingPaths(None, None, None, result)
     raw_path, label_path, annotated_path = save_training_sample(image, train_dir, timestamp, yolo_annotations or [])
     return TrainingPaths(raw_path, label_path, annotated_path, result)
 
@@ -277,6 +280,7 @@ def aim_at_screen_position(
     manual_self: tuple[int, int] | None = None,
     shot_mode: str = "normal",
     train_dir: Path = Path("train"),
+    save_training_data: bool = True,
 ) -> tuple[TrainingPaths, dict[str, object], tuple[int, int] | None]:
     """Analyze a mouse target and click its calculated aim-disc point once.
 
@@ -294,6 +298,7 @@ def aim_at_screen_position(
     paths = process_capture(
         image, train_dir, resolution=resolution,
         yolo_annotations=[(2, manual_self), (0, (target_x, target_y))],
+        save_training_data=save_training_data,
     )
     solution, click_client = aim_click_for_target(
         paths.result, target_x, target_y, manual_self=manual_self, shot_mode=shot_mode,

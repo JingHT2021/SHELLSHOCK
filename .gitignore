@@ -9,10 +9,15 @@ __pycache__/
 .worktrees/
 pytest-cache-files-*/
 tmp*/
+.test_tmp/
 
 # Runtime captures and locally collected training data
 output/
 train/
+runs/
+weights/
+Ultralytics/
+yolo*.pt
 
 # Editor and OS files
 .vscode/

@@ -36,7 +36,7 @@ class PortalConfig:
 
     orange_lower: tuple[int, int, int] = (14, 230, 150)
     orange_upper: tuple[int, int, int] = (16, 255, 255)
-    blue_lower: tuple[int, int, int] = (99, 220, 150)
+    blue_lower: tuple[int, int, int] = (99, 180, 150)
     blue_upper: tuple[int, int, int] = (102, 255, 255)
     reference_width: int = 1920
     min_radius: float = 25.0

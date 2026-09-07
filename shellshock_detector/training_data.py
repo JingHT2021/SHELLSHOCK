@@ -48,6 +48,7 @@ CLASS_NAMES = {
     4: "obstacle_line",
     5: "portal_orange",
     6: "portal_blue",
+    9: "triple_damage",
 }
 
 

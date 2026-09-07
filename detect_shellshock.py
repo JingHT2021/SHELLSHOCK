@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+# from pathlib import Path  # Training-data capture is temporarily disabled.
 
 import keyboard
 import win32api
@@ -13,7 +13,7 @@ enable_per_monitor_dpi_awareness()
 from shellshock_detector.app import (
     GAME_CAPTURE_HEIGHT,
     aim_at_screen_position,
-    capture_once,
+    # capture_once,  # Training-data capture is temporarily disabled.
     client_screen_geometry,
     find_game_window,
     screen_to_client_point,
@@ -83,7 +83,7 @@ def main() -> None:
         help="Expected game-window resolution; auto uses the captured client size.",
     )
     args = parser.parse_args()
-    train_dir = Path("train")
+    # train_dir = Path("train")  # Training-data capture is temporarily disabled.
     manual_self: tuple[int, int] | None = None
     manual_target: tuple[int, int] | None = None
     shot_mode = "normal"
@@ -96,21 +96,21 @@ def main() -> None:
             raise RuntimeError("point is below the saved 2000-pixel capture")
         return point
 
-    def current_annotations() -> list[tuple[int, tuple[int, int]]]:
-        annotations: list[tuple[int, tuple[int, int]]] = []
-        if manual_self is not None:
-            annotations.append((2, manual_self))
-        if manual_target is not None:
-            annotations.append((0, manual_target))
-        return annotations
+    # def current_annotations() -> list[tuple[int, tuple[int, int]]]:
+    #     annotations: list[tuple[int, tuple[int, int]]] = []
+    #     if manual_self is not None:
+    #         annotations.append((2, manual_self))
+    #     if manual_target is not None:
+    #         annotations.append((0, manual_target))
+    #     return annotations
 
-    def run_capture() -> None:
-        try:
-            paths = capture_once(args.resolution, train_dir=train_dir, yolo_annotations=current_annotations())
-            print(f"Saved training data: {paths.raw_path}, {paths.label_path}, {paths.annotated_path}")
-            print("Wind: " + (f"{paths.result.wind.value} {paths.result.wind.direction}" if paths.result.wind.value is not None else "not found (T uses 0 wind)"))
-        except RuntimeError as error:
-            print(f"Capture skipped: {error}")
+    # def run_capture() -> None:
+    #     try:
+    #         paths = capture_once(args.resolution, train_dir=train_dir, yolo_annotations=current_annotations())
+    #         print(f"Saved training data: {paths.raw_path}, {paths.label_path}, {paths.annotated_path}")
+    #         print("Wind: " + (f"{paths.result.wind.value} {paths.result.wind.direction}" if paths.result.wind.value is not None else "not found (T uses 0 wind)"))
+    #     except RuntimeError as error:
+    #         print(f"Capture skipped: {error}")
 
     def set_self_position() -> None:
         nonlocal manual_self
@@ -146,7 +146,7 @@ def main() -> None:
             manual_target = mouse_client_point()
             paths, solution, click_point = aim_at_screen_position(
                 win32api.GetCursorPos(), args.resolution,
-                manual_self=manual_self, shot_mode=shot_mode, train_dir=train_dir,
+                manual_self=manual_self, shot_mode=shot_mode, save_training_data=False,
             )
             selected = solution["selected"]
             assert isinstance(selected, dict)
@@ -160,7 +160,7 @@ def main() -> None:
             if click_point is None:
                 print("Aim not clicked: calculated aim-disc point is outside the game client area")
             print(f"Target {manual_target}  |  mode={shot_mode}")
-            print(f"Saved training data: {paths.raw_path}, {paths.label_path}, {paths.annotated_path}")
+            # print(f"Saved training data: {paths.raw_path}, {paths.label_path}, {paths.annotated_path}")
         except (RuntimeError, ValueError) as error:
             print(f"Aim skipped: {error}")
 

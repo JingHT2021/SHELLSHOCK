@@ -166,6 +166,18 @@ class AppTests(unittest.TestCase):
             self.assertFalse((train_dir / "20260904_120000_raw.png").exists())
             self.assertEqual(paths.result.ballistics, [])
 
+    def test_process_capture_can_skip_training_data_writes(self):
+        image = np.zeros((1600, 2560, 3), dtype=np.uint8)
+        with patch.object(app, "save_training_sample") as save_training_sample:
+            paths = process_capture(
+                image, Path("train"), now=lambda: "20260907_120000", save_training_data=False,
+            )
+
+        save_training_sample.assert_not_called()
+        self.assertIsNone(paths.raw_path)
+        self.assertIsNone(paths.label_path)
+        self.assertIsNone(paths.annotated_path)
+
     def test_full_scene_keeps_wind_detection_without_tank_detection(self):
         fixture = Path(__file__).parent / "fixtures" / "full_scene.png"
         image = cv2.imdecode(np.frombuffer(fixture.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
