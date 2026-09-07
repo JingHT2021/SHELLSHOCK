@@ -23,3 +23,17 @@ def test_aim_report_renders_aligned_red_angle_and_power():
     text = format_aim_report("wormhole", {"direction": "right", "angle_degrees": 42, "power": 52, "portal_count": 1, "events": ["portal", "target"]}, 12, "left", (30, 40))
     assert "\x1b[31m( 52,  42°)\x1b[0m" in text
     assert "PORTALS  1" in text
+
+
+def test_aim_report_includes_combined_reflection_event_details():
+    text = format_aim_report(
+        "reflection",
+        {"direction": "left", "angle_degrees": 42, "power": 52, "portal_count": 1,
+         "reflection_count": 1, "reflection_point": (500, 700), "reflection_obstacle": {"kind": "line", "index": 0},
+         "events": ["reflection", "portal", "target"]},
+        0, "right", (30, 40),
+    )
+
+    assert "REFLECTIONS  1 @ (500, 700)" in text
+    assert "line #0" in text
+    assert "reflection→portal→target" in text

@@ -14,7 +14,7 @@ from shellshock_detector.app import (
 )
 from shellshock_detector.global_solver import solve_integer_shot
 from shellshock_detector.yolo_runtime import YoloDetector
-from shellshock_detector.world_geometry import build_world
+from shellshock_detector.world_geometry import build_world_from_image
 from shellshock_detector.wind import detect_wind
 
 DEFAULT_WEIGHTS = Path("train/runs/shellshock_yolo11n_cv65_final_all/weights/best.pt")
@@ -32,8 +32,16 @@ def format_aim_report(mode: str, solution: dict[str, object], wind_value: int | 
     wind = f"{wind_value if wind_value is not None else 0:>2} {wind_direction or 'right':<5}"
     controls = f"\x1b[31m({int(solution['power']):>3}, {int(solution['angle_degrees']):>3}°)\x1b[0m"
     portals = int(solution.get("portal_count", 0))
+    reflections = int(solution.get("reflection_count", 0))
+    reflection_point = solution.get("reflection_point")
+    reflection_obstacle = solution.get("reflection_obstacle")
     events = "→".join(str(item) for item in solution.get("events", ()))
-    return f"MODE {mode:<9} WIND {wind}  {controls}\nPORTALS {portals:>2}  EVENTS {events:<24} CLICK {click}"
+    reflection = (
+        f"REFLECTIONS {reflections:>2} @ {reflection_point} {reflection_obstacle['kind']} #{reflection_obstacle['index']}"
+        if reflections and isinstance(reflection_obstacle, dict) else
+        f"REFLECTIONS {reflections:>2} @ {reflection_point}" if reflections else "REFLECTIONS  0"
+    )
+    return f"MODE {mode:<9} WIND {wind}  {controls}\nPORTALS {portals:>2}  {reflection}  EVENTS {events:<24} CLICK {click}"
 
 
 def main() -> None:
@@ -57,7 +65,7 @@ def main() -> None:
             target = screen_to_client_point(win32api.GetCursorPos(), origin, size)
             image = capture_client_area(hwnd)
             detections = detector.detect(image)
-            world = build_world(detections, image.shape[1], image.shape[0])
+            world = build_world_from_image(detections, image)
             orange = sum(box.name == "portal_orange" for box in detections)
             blue = sum(box.name == "portal_blue" for box in detections)
             print(f"World: self={'yes' if world.self_position else 'no'}; portals orange={orange}, blue={blue}, pairs={len(world.portal_pairs)}, unpaired={world.unpaired_portals}", flush=True)
