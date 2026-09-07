@@ -10,6 +10,11 @@ def test_page_keys_select_high_and_low_arc_modes():
     assert select_mode("page down") == "low_arc"
 
 
+def test_page_keys_keep_wormhole_family_when_wormhole_is_selected():
+    assert select_mode("page up", "wormhole") == "wormhole_high_arc"
+    assert select_mode("page down", "wormhole") == "wormhole_low_arc"
+
+
 def test_delete_is_the_only_declared_exit_hotkey():
     assert EXIT_HOTKEY == "delete"
 

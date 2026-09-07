@@ -35,6 +35,31 @@ def test_wormhole_solver_returns_verified_single_portal_shot():
     assert result["events"][-1] == "target"
 
 
+def test_wormhole_solver_keeps_high_power_vertical_portal_candidates():
+    """A virtual target below the tank can still require a vertical climb first."""
+    from shellshock_detector.wormhole_solver import solve_wormhole_integer_shot
+
+    pair = PortalPair(Portal("orange", (100, 300), 35), Portal("blue", (900, 700), 35))
+    result = solve_wormhole_integer_shot(
+        (100, 700), (900, 1000), World(image_width=1920, image_height=1080, portal_pairs=[pair]),
+        0, "right", 1920,
+    )
+    assert result["status"] == "reachable"
+    assert result["power"] >= 50
+    assert result["angle_degrees"] >= 89
+
+
+def test_wormhole_high_arc_search_starts_at_full_power_and_prefers_high_angle():
+    from shellshock_detector.wormhole_solver import solve_wormhole_integer_shot
+
+    pair = PortalPair(Portal("orange", (220, 560), 35), Portal("blue", (650, 460), 35))
+    world = World(image_width=1920, image_height=1080, portal_pairs=[pair])
+    low = solve_wormhole_integer_shot((100, 700), (900, 700), world, 0, "right", 1920, arc_preference="low")
+    high = solve_wormhole_integer_shot((100, 700), (900, 700), world, 0, "right", 1920, arc_preference="high")
+    assert low["status"] == high["status"] == "reachable"
+    assert high["power"] >= low["power"]
+
+
 def test_wormhole_solver_handles_four_pairs_within_one_second():
     from shellshock_detector.wormhole_solver import solve_wormhole_integer_shot
 
