@@ -77,6 +77,14 @@ class AppTests(unittest.TestCase):
 
         ensure_game_window_is_active(123, is_window=lambda handle: handle == 123, activate=reject_activation)
 
+    def test_ensure_game_window_is_active_tolerates_win32_activation_error(self):
+        import pywintypes
+
+        def reject_activation(_: int) -> None:
+            raise pywintypes.error(0, "SetForegroundWindow", "Windows rejected foreground activation")
+
+        ensure_game_window_is_active(123, is_window=lambda handle: handle == 123, activate=reject_activation)
+
     def test_screen_to_client_point_rejects_mouse_outside_game_client_area(self):
         self.assertEqual(screen_to_client_point((110, 220), (100, 200), (1920, 1080)), (10, 20))
         with self.assertRaisesRegex(ValueError, "outside"):

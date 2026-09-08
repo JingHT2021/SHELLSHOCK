@@ -1,4 +1,6 @@
-from detect_shellshock_yolo import DEFAULT_WEIGHTS, EXIT_HOTKEY, format_aim_report, select_mode
+from detect_shellshock_yolo import (
+    DEFAULT_WEIGHTS, EXIT_HOTKEY, format_aim_report, format_solver_diagnostics, select_mode,
+)
 
 
 def test_yolo_default_uses_final_all_data_weights():
@@ -54,7 +56,38 @@ def test_aim_report_includes_accuracy_and_theory_diagnostics():
     assert 'INCIDENCE 0.410' in text
 
 
+def test_aim_report_includes_layer_timing_breakdown():
+    text = format_aim_report('reflection_low', {
+        'power': 46, 'angle_degrees': 62,
+        'timing': {'layer_a_seconds': 0.0123, 'layer_b_seconds': 0.0456,
+                   'layer_c1_seconds': 0.0789, 'layer_c2_seconds': 0.1234,
+                   'total_seconds': 0.2602},
+    }, 0, 'right', (1, 2))
+    assert 'TIME A 12.3ms B 45.6ms C1 78.9ms C2 123.4ms TOTAL 260.2ms' in text
+
+
 def test_aim_report_includes_portal_radii():
     text = format_aim_report('wormhole_low', {'power': 60, 'angle_degrees': 50,
         'portal_radii': [{'id': '0:orange', 'visual': 30., 'trigger': 27., 'avoid': 35.}]}, 0, 'right', (1, 2))
     assert 'VISUAL 30.00 TRIGGER 27.00 AVOID 35.00' in text
+
+
+def test_solver_diagnostics_report_obstacles_stages_and_timing():
+    text = format_solver_diagnostics({
+        'layer_a_passed': 17,
+        'layer_b_passed': 10,
+        'integer_candidates_raw': 42,
+        'integer_candidates_unique': 19,
+        'integer_full_replays': 10,
+        'integer_replay_failed': 10,
+        'layer_a_invalid_reasons': {'A_SEGMENT_DIRECTION': 3},
+        'layer_b_invalid_reasons': {'B_WRONG_FIRST_COLLISION': 8},
+        'layer_b_soft_invalid_reasons': {'B_PLANNED_PORTAL_MISS': 4},
+        'timing': {'layer_a_seconds': .01, 'layer_b_seconds': .02,
+                   'layer_c1_seconds': .03, 'layer_c2_seconds': .04,
+                   'total_seconds': .10},
+    }, line_count=4, circle_count=2)
+    assert 'OBSTACLES lines=4 circles=2' in text
+    assert 'STAGES A_passed=17 B_passed=10 C_raw=42 C_unique=19 replays=10 failed=10' in text
+    assert 'REASONS A_SEGMENT_DIRECTION=3 B_WRONG_FIRST_COLLISION=8 SOFT_B_PLANNED_PORTAL_MISS=4' in text
+    assert 'TIME A 10.0ms B 20.0ms C1 30.0ms C2 40.0ms TOTAL 100.0ms' in text

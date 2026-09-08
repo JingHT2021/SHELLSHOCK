@@ -47,6 +47,17 @@ def test_wormhole_solver_returns_verified_single_portal_shot():
     assert result['reflection_count'] == 0
 
 
+def test_wormhole_layer_a_rejects_an_ordered_portal_route_that_cannot_reach_its_entry():
+    from shellshock_detector_yolo.wormhole_solver import coarse_portal_route_possible
+
+    pair = PortalPair(Portal("orange", (-20, 700), 35), Portal("blue", (650, 460), 35))
+
+    result = coarse_portal_route_possible((100, 700), (900, 700), ("0:orange",), (pair,), (0.0, 0.0))
+
+    assert not result.valid
+    assert result.reason == "A_SEGMENT_DIRECTION"
+
+
 def test_wormhole_solver_keeps_high_power_vertical_portal_candidates():
     """A virtual target below the tank can still require a vertical climb first."""
     from shellshock_detector.wormhole_solver import solve_wormhole_integer_shot
