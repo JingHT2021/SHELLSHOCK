@@ -1,5 +1,6 @@
 from detect_shellshock_yolo import (
-    DEFAULT_WEIGHTS, EXIT_HOTKEY, display_mode, format_aim_report, format_solver_diagnostics, select_mode,
+    DEFAULT_WEIGHTS, EXIT_HOTKEY, display_mode, format_aim_report, format_normal_diagnostics,
+    format_solver_diagnostics, select_mode,
 )
 
 
@@ -96,3 +97,16 @@ def test_solver_diagnostics_report_obstacles_stages_and_timing():
     assert 'STAGES A_passed=17 B_passed=10 C_raw=42 C_unique=19 replays=10 failed=10' in text
     assert 'REASONS A_SEGMENT_DIRECTION=3 B_WRONG_FIRST_COLLISION=8 SOFT_B_PLANNED_PORTAL_MISS=4' in text
     assert 'TIME A 10.0ms B 20.0ms C1 30.0ms C2 40.0ms TOTAL 100.0ms' in text
+
+
+def test_normal_diagnostics_report_target_theory_and_rejections():
+    text = format_normal_diagnostics({
+        'target': {'x': 920.0, 'y': 540.0},
+        'wind_value': 0, 'wind_direction': 'right',
+        'theory_angle': 45.16, 'theory_power': 55.28,
+        'candidate_count': 21, 'verified_count': 7,
+        'rejected_reasons': {'target-miss': 10, 'obstacle': 4},
+    })
+    assert 'TARGET=(920.0,540.0) WIND=0 right' in text
+    assert 'THEORY angle=45.16 power=55.28 CANDIDATES=21 VERIFIED=7' in text
+    assert 'REJECTED obstacle=4 target-miss=10' in text

@@ -107,6 +107,23 @@ def format_solver_diagnostics(diagnostics: dict[str, object], *, line_count: int
     ))
 
 
+def format_normal_diagnostics(diagnostics: dict[str, object]) -> str:
+    target = diagnostics.get('target', {})
+    rejected = diagnostics.get('rejected_reasons') or {}
+    rejected_text = ' '.join(f'{key}={value}' for key, value in sorted(rejected.items())) or 'none'
+    return '\n'.join((
+        'TARGET=({:.1f},{:.1f}) WIND={} {}'.format(
+            float(target.get('x', 0.0)), float(target.get('y', 0.0)),
+            diagnostics.get('wind_value', 0), diagnostics.get('wind_direction', 'right'),
+        ),
+        'THEORY angle={:.2f} power={:.2f} CANDIDATES={} VERIFIED={}'.format(
+            float(diagnostics.get('theory_angle', 0.0)), float(diagnostics.get('theory_power', 0.0)),
+            diagnostics.get('candidate_count', 0), diagnostics.get('verified_count', 0),
+        ),
+        f'REJECTED {rejected_text}',
+    ))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="YOLO ShellShock wormhole aim")
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
@@ -176,6 +193,8 @@ def main() -> None:
             wind, _, _ = detect_wind(image)
             value, direction = wind.value or 0, wind.direction or "right"
             solution = solve_integer_shot(world.self_position, target, world, value, direction, image.shape[1], mode)
+            if mode_parts(mode)[0] == "normal" and solution.get('diagnostics'):
+                print(format_normal_diagnostics(solution['diagnostics']), flush=True)
             if solution.get("status") != "reachable":
                 reason = str(solution.get("reason"))
                 messages = {
