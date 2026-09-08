@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional reviewed portal-label directory; its same-stem .txt files override raw labels without changing raw data.",
     )
+    parser.add_argument("--annotation-override-dir", type=Path, default=None)
     parser.add_argument("--exclude-unreviewed-enemy-candidates", action="store_true", help="Exclude frames with red enemy candidates. This is opt-in because color candidates require human review.")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing derived output directory; raw data is never modified.")
     return parser.parse_args()
@@ -35,6 +36,7 @@ def main() -> None:
             preview_count=args.preview_count,
             exclude_unlabelled_enemy_candidates=args.exclude_unreviewed_enemy_candidates,
             portal_review_dir=args.portal_review_dir,
+            annotation_override_dir=args.annotation_override_dir,
         ),
         overwrite=args.overwrite,
     )

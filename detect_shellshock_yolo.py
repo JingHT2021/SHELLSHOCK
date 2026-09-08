@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from datetime import datetime
 
 import keyboard
 import win32api
@@ -13,6 +14,7 @@ from shellshock_detector.app import (
     ensure_game_window_is_active, find_game_window, screen_to_client_point,
 )
 from shellshock_detector.global_solver import solve_integer_shot
+from shellshock_detector.dataset_capture import capture_fixed_screen, save_shot_metadata
 from shellshock_detector.shot_modes import mode_parts, normalize_mode
 from shellshock_detector.yolo_runtime import YoloDetector
 from shellshock_detector.world_geometry import build_world_from_image
@@ -65,17 +67,41 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="YOLO ShellShock wormhole aim")
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument("--confidence", type=float, default=0.6)
+    parser.add_argument("--capture-dir", type=Path, default=Path("train/yolo_captures"))
+    parser.add_argument("--shot-metadata-dir", type=Path, default=Path("train/shot_metadata"))
+    parser.add_argument("--capture-x", type=int, default=0)
+    parser.add_argument("--capture-y", type=int, default=0)
+    parser.add_argument("--capture-width", type=int, default=None)
+    parser.add_argument("--capture-height", type=int, default=None)
     args = parser.parse_args()
     detector = YoloDetector(str(args.weights), args.confidence)
     mode = "normal_low"
+    capture_mode = False
 
     def choose(value: str) -> None:
         nonlocal mode
         mode = value
         print(f"Mode: {mode}", flush=True)
 
+    def toggle_capture() -> None:
+        nonlocal capture_mode
+        capture_mode = not capture_mode
+        print(f"Capture mode: {'ON' if capture_mode else 'OFF'}", flush=True)
+
     def aim() -> None:
         try:
+            capture_stem = None
+            if capture_mode:
+                capture_stem = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                region = None
+                if args.capture_width is not None or args.capture_height is not None:
+                    if args.capture_width is None or args.capture_height is None:
+                        raise ValueError("--capture-width and --capture-height must be provided together")
+                    region = (args.capture_x, args.capture_y, args.capture_width, args.capture_height)
+                try:
+                    print(f"Capture: {capture_fixed_screen(args.capture_dir, region=region, stem=capture_stem)}", flush=True)
+                except (OSError, RuntimeError, ValueError) as error:
+                    print(f"Capture skipped: {error}", flush=True)
             print(f"Searching {mode} shot...", flush=True)
             hwnd = find_game_window()
             origin, size = client_screen_geometry(hwnd)
@@ -104,17 +130,20 @@ def main() -> None:
             ensure_game_window_is_active(hwnd)
             click_screen_point((origin[0] + click[0], origin[1] + click[1]))
             print(format_aim_report(mode, solution, value, direction, click), flush=True)
+            if capture_stem:
+                save_shot_metadata(args.shot_metadata_dir, capture_stem, direction=str(solution["direction"]), angle_degrees=float(solution["angle_degrees"]), power=float(solution["power"]))
         except (RuntimeError, ValueError) as error:
             print(f"Aim skipped: {error}")
 
     keyboard.add_hotkey("e", aim)
+    keyboard.add_hotkey("caps lock", toggle_capture)
     keyboard.add_hotkey("t", lambda: choose("normal_low"))
     keyboard.add_hotkey("h", lambda: choose("wormhole_low"))
     keyboard.add_hotkey("r", lambda: choose("reflection_low"))
     keyboard.add_hotkey("page up", lambda: choose(select_mode("page up", mode)))
     keyboard.add_hotkey("page down", lambda: choose(select_mode("page down", mode)))
     keyboard.add_hotkey(EXIT_HOTKEY, lambda: print("Exiting YOLO aim...", flush=True))
-    print("Ready: E=aim, T=normal, H=wormhole, R=reflection, PageUp=high arc, PageDown=low arc, Del=quit")
+    print("Ready: E=aim, CapsLock=toggle capture, T=normal, H=wormhole, R=reflection, PageUp=high arc, PageDown=low arc, Del=quit")
     keyboard.wait(EXIT_HOTKEY)
 
 

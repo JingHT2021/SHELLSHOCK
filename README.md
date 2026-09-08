@@ -39,6 +39,42 @@
 
 ## YOLO Detection 数据
 
+### 多类别人工复核
+
+使用以下命令打开多类别圆形/线段标注器。默认直接读取 `train/yolo_captures/full`：
+
+```powershell
+.\.venv\Scripts\python.exe annotate_enemies.py --all-images
+```
+
+数字键 `0–9` 选择类别；左键点击已有标注可选中，点击空白处新增，右键删除当前类别下最近的命中标注，`-`/`+` 调整选中圆的半径，方向键微调位置，`A/Q` 向右调整角度（精调 1 度/粗调 5 度），`D/E` 向左调整角度（精调 1 度/粗调 5 度），`Z/C` 调整风力，角度和风力会跨过边界循环并自动切换方向，标题显示角度和风向，`Ctrl+鼠标滚轮` 以鼠标为中心缩放，`PageUp/PageDown` 切换图片，`B` 切换方框预览，`Esc` 保存退出。编辑结果写入 `train/annotation_overrides`，不会修改原始 `.txt`。
+
+选择 `1` 点击炮管终点，选择 `2 self` 点击己方中心；`self` 默认圆半径为普通圆的两倍。选择 `4 obstacle_line` 后左键依次点击两个端点即可标注线段。`--barrel-length 35` 以 2560 像素宽度为基准，程序会按照当前截图宽度自动缩放，并在标题显示实际长度。线段和炮管点写入 `train/pose_geometry`。窗口会保持截图原始宽高比。
+
+可将 Detection 数据转换为双关键点 Pose 数据：
+
+```powershell
+.\.venv\Scripts\python.exe prepare_yolo_pose.py --geometry-dir train/pose_geometry
+```
+
+输出到 `train/yolo_pose_dataset`，关键点配置为 `[2, 3]`：圆形为“圆心+边缘”，直线为“两端点”，`self` 为“中心+炮管终点”。
+
+准备训练集时可显式指定覆盖层：
+
+```powershell
+.\.venv\Scripts\python.exe prepare_yolo_dataset.py --annotation-override-dir train/annotation_overrides
+```
+
+类别为：`0 enemy`、`1 ally`、`2 self`、`3 obstacle_circle`、`4 obstacle_line`、`5 portal_orange`、`6 portal_blue`、`7 blackhole`、`8 double_damage`、`9 Triple_damage`。
+
+### YOLO 截图采集模式
+
+```powershell
+.\.venv\Scripts\python.exe detect_shellshock_yolo.py
+```
+
+按 Caps Lock 切换采集模式。模式开启时按 `E` 仍会执行瞄准计算，同时将全图保存到 `train/yolo_captures/full`，风力区域保存到 `wind`，每个检测到的虫洞保存到 `wormholes`。默认按屏幕左上角固定区域截图：2560 宽取 `2560×1300`，3840 宽取 `3840×1850`，其它宽度按比例推导；可用 `--capture-x/--capture-y/--capture-width/--capture-height` 覆盖。
+
 每次 E 重新计算并保存截图时，都会生成：
 
 ```text
@@ -78,3 +114,27 @@ train/annotated/20260905_230000.png
 # 4K 与 Windows 缩放
 
 脚本启动时会启用 Windows 的“每显示器 DPI 感知”，因此在 3840×2160 显示器使用 125%/150%/200% 缩放时，窗口坐标也会按真实物理像素获取，不会被缩成约 2560 像素。更新后请彻底退出并重新启动脚本；4K 屏幕建议使用 `--resolution 3840x2160`。
+### 先用现有模型预标注，再人工审核
+
+```powershell
+.\.venv\Scripts\python.exe prelabel_yolo.py
+.\.venv\Scripts\python.exe annotate_enemies.py --all-images --barrel-length 35
+.\.venv\Scripts\python.exe prepare_yolo_pose.py
+```
+
+`prelabel_yolo.py` 默认读取 `train/yolo_captures/full`，把模型识别结果写到
+`train/annotation_overrides`。已有覆盖层不会被覆盖；需要重新预测时加
+`--overwrite`。旧模型的 `ally`（旧类别 1）会被忽略，不会误当成炮管终点。
+
+标注器中：`1` 点击炮管终点，`2` 点击己方中心；`4` 连续点击起点和终点生成线段；
+选中标注后用方向键逐像素微调，`PageUp/PageDown` 切换图片，标题中的
+`RADIUS` 会实时显示 `+/-` 调整后的圆半径。
+
+风力审核结果会保存到 `train/wind_labels`，并按同名文件关联
+`train/yolo_captures/wind` 中的风力裁剪图。完成审核后可生成后续 RNN 使用的清单：
+
+```powershell
+.\.venv\Scripts\python.exe prepare_wind_rnn_dataset.py
+```
+
+输出为 `train/wind_rnn_dataset/manifest.csv`，目标字段为带方向的 `wind_signed`。

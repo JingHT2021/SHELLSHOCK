@@ -42,13 +42,15 @@ class ObstacleDetection:
 
 CLASS_NAMES = {
     0: "enemy",
-    1: "ally",
+    1: "self_muzzle",
     2: "self",
     3: "obstacle_circle",
     4: "obstacle_line",
     5: "portal_orange",
     6: "portal_blue",
-    9: "triple_damage",
+    7: "blackhole",
+    8: "double_damage",
+    9: "Triple_damage",
 }
 
 

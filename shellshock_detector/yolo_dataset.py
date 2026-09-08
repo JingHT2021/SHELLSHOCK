@@ -17,14 +17,14 @@ import numpy as np
 
 CLASS_NAMES = {
     0: "enemy",
-    1: "placeholder_1",
+    1: "self_muzzle",
     2: "self",
     3: "obstacle_circle",
     4: "obstacle_line",
     5: "portal_orange",
     6: "portal_blue",
-    7: "placeholder_7",
-    8: "placeholder_8",
+    7: "blackhole",
+    8: "double_damage",
     9: "Triple_damage",
 }
 VALID_CLASS_IDS = frozenset(CLASS_NAMES)
@@ -48,6 +48,7 @@ class PreparationConfig:
     detect_enemy_candidates: bool = True
     exclude_unlabelled_enemy_candidates: bool = False
     portal_review_dir: Path | None = None
+    annotation_override_dir: Path | None = None
 
 
 @dataclass
@@ -544,8 +545,17 @@ def prepare_dataset(raw_dir: Path, output_dir: Path, config: PreparationConfig =
             if config.portal_review_dir is not None
             else None
         )
-        if review_label_path is not None and review_label_path.exists():
+        override_label_path = (
+            Path(config.annotation_override_dir) / f"{stem}.txt"
+            if config.annotation_override_dir is not None
+            else raw_dir.parent / "annotation_overrides" / f"{stem}.txt"
+        )
+        if override_label_path.exists():
+            label_path = override_label_path
+            source = "annotation_override"
+        elif review_label_path is not None and review_label_path.exists():
             label_path = review_label_path
+            source = "portal_review"
             portal_review_label_overrides += 1
         image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
         if image is None:

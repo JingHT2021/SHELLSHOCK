@@ -2,8 +2,12 @@ import cv2
 import numpy as np
 
 from annotate_enemies import (
+    CLASS_KEY_MAP,
+    CircleAnnotation,
     build_parser,
+    circle_to_yolo_box,
     display_to_image_point,
+    delete_nearest_annotation,
     key_action,
     select_images,
     write_enemy_supplement,
@@ -49,3 +53,22 @@ def test_parser_can_select_every_image_in_a_custom_review_directory():
 
     assert str(args.raw_dir) == "train\\review_portal_mismatch"
     assert args.all_images is True
+
+
+def test_numeric_keys_select_all_requested_classes():
+    assert CLASS_KEY_MAP == {
+        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4,
+        "5": 5, "6": 6, "7": 7, "8": 8, "9": 9,
+    }
+
+
+def test_circle_is_saved_as_clipped_square_yolo_box():
+    annotation = CircleAnnotation(7, 5, 5, 50)
+    line = circle_to_yolo_box(annotation, 100, 80)
+    assert line == "7 0.275000 0.343750 0.550000 0.687500"
+
+
+def test_right_click_deletes_nearest_matching_annotation_only():
+    annotations = [CircleAnnotation(0, 10, 10, 10), CircleAnnotation(1, 12, 10, 10), CircleAnnotation(0, 80, 80, 10)]
+    remaining = delete_nearest_annotation(annotations, 11, 10, 0)
+    assert remaining == [CircleAnnotation(1, 12, 10, 10), CircleAnnotation(0, 80, 80, 10)]
