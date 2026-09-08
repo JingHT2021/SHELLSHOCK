@@ -7,6 +7,17 @@ from .solver_config import INTEGER_ANGLE_RADIUS, MISS_TIE_THRESHOLD_AT_REFERENCE
 from .wormhole_solver import solve_ballistic_for_speed
 
 
+def _select_normal_candidate(candidates, arc_preference):
+    """Choose the lowest-power valid shot for low-arc aiming."""
+    if arc_preference == 'low':
+        return min(candidates, key=lambda c: (
+            c['power'], c['miss_distance'], -c['clearance'], c['angle_degrees'],
+        ))
+    return min(candidates, key=lambda c: (
+        -c['angle_degrees'], c['miss_distance'], c['power'], -c['clearance'],
+    ))
+
+
 def solve_normal_integer_shot(source, target, world, wind_value, wind_direction,
                               image_width, *, arc_preference='low', force_power=None):
     scale = image_width / 1920
@@ -68,6 +79,6 @@ def solve_normal_integer_shot(source, target, world, wind_value, wind_direction,
         return {'status': 'unreachable', 'reason': 'no-verified-shot', 'diagnostics': diagnostics}
     best_miss = min(c['miss_distance'] for c in candidates)
     reliable = [c for c in candidates if c['miss_distance'] <= best_miss + MISS_TIE_THRESHOLD_AT_REFERENCE*scale]
-    result = min(reliable, key=lambda c: (-c['clearance'], c['miss_distance'], -c['angle_degrees'] if arc_preference == 'high' else c['power']))
+    result = _select_normal_candidate(reliable, arc_preference)
     result['diagnostics'] = diagnostics
     return result
