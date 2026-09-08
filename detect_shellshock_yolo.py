@@ -13,6 +13,7 @@ from shellshock_detector.app import (
     ensure_game_window_is_active, find_game_window, screen_to_client_point,
 )
 from shellshock_detector.global_solver import solve_integer_shot
+from shellshock_detector.shot_modes import mode_parts, normalize_mode
 from shellshock_detector.yolo_runtime import YoloDetector
 from shellshock_detector.world_geometry import build_world_from_image
 from shellshock_detector.wind import detect_wind
@@ -21,11 +22,11 @@ DEFAULT_WEIGHTS = Path("train/runs/shellshock_yolo11n_cv65_final_all/weights/bes
 EXIT_HOTKEY = "delete"
 
 
-def select_mode(key: str, current_mode: str = "normal") -> str:
+def select_mode(key: str, current_mode: str = "normal_low") -> str:
     if key not in {"page up", "page down"}:
-        return key
-    arc = "high_arc" if key == "page up" else "low_arc"
-    return f"wormhole_{arc}" if current_mode.startswith("wormhole") else arc
+        return normalize_mode(key)
+    family, _ = mode_parts(current_mode)
+    return f"{family}_{'high' if key == 'page up' else 'low'}"
 
 
 def format_aim_report(mode: str, solution: dict[str, object], wind_value: int | float | None, wind_direction: str | None, click: tuple[int, int]) -> str:
@@ -41,7 +42,23 @@ def format_aim_report(mode: str, solution: dict[str, object], wind_value: int | 
         if reflections and isinstance(reflection_obstacle, dict) else
         f"REFLECTIONS {reflections:>2} @ {reflection_point}" if reflections else "REFLECTIONS  0"
     )
-    return f"MODE {mode:<9} WIND {wind}  {controls}\nPORTALS {portals:>2}  {reflection}  EVENTS {events:<24} CLICK {click}"
+    lines = [f"MODE {mode:<9} WIND {wind}  {controls}",
+             f"PORTALS {portals:>2}  {reflection}  EVENTS {events:<24} CLICK {click}"]
+    metrics = []
+    for field, label, precision, suffix in (
+        ('miss_distance', 'MISS', 2, ' px'), ('clearance', 'CLEARANCE', 2, ' px'),
+        ('incidence', 'INCIDENCE', 3, ''), ('theoretical_min_power', 'PMIN', 2, ''),
+        ('low_start_power', 'LOW START', 0, ''), ('theory_parameter', 'THEORY PARAM', 6, ''),
+    ):
+        if solution.get(field) is not None:
+            metrics.append(f"{label} {float(solution[field]):.{precision}f}{suffix}")
+    if metrics:
+        lines.append('  '.join(metrics))
+    for portal in solution.get('portal_radii', ()):
+        lines.append(f"PORTAL {portal['id']} VISUAL {portal['visual']:.2f} TRIGGER {portal['trigger']:.2f} AVOID {portal['avoid']:.2f}")
+    if solution.get('arc_fallback'):
+        lines.append(f"single reflection solution: using {solution.get('selected_arc', 'available')} endpoint")
+    return '\n'.join(lines)
 
 
 def main() -> None:
@@ -50,7 +67,7 @@ def main() -> None:
     parser.add_argument("--confidence", type=float, default=0.6)
     args = parser.parse_args()
     detector = YoloDetector(str(args.weights), args.confidence)
-    mode = "normal"
+    mode = "normal_low"
 
     def choose(value: str) -> None:
         nonlocal mode
@@ -91,9 +108,9 @@ def main() -> None:
             print(f"Aim skipped: {error}")
 
     keyboard.add_hotkey("e", aim)
-    keyboard.add_hotkey("t", lambda: choose("normal"))
-    keyboard.add_hotkey("h", lambda: choose("wormhole_low_arc"))
-    keyboard.add_hotkey("r", lambda: choose("reflection"))
+    keyboard.add_hotkey("t", lambda: choose("normal_low"))
+    keyboard.add_hotkey("h", lambda: choose("wormhole_low"))
+    keyboard.add_hotkey("r", lambda: choose("reflection_low"))
     keyboard.add_hotkey("page up", lambda: choose(select_mode("page up", mode)))
     keyboard.add_hotkey("page down", lambda: choose(select_mode("page down", mode)))
     keyboard.add_hotkey(EXIT_HOTKEY, lambda: print("Exiting YOLO aim...", flush=True))

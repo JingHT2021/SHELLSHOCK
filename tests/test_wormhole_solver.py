@@ -2,8 +2,18 @@ from __future__ import annotations
 
 from math import isclose
 from time import perf_counter
+from itertools import permutations
 
 from shellshock_detector.world_geometry import Portal, PortalPair, World
+
+
+def test_wormhole_ranking_uses_global_miss_threshold_in_any_order():
+    from shellshock_detector.wormhole_solver import select_wormhole_candidate
+    candidates = [dict(power=50, miss_distance=miss, clearance=clearance,
+                       angle_degrees=45, portal_count=1, direction='right', portal_sequence=[str(i)])
+                  for i, (miss, clearance) in enumerate(((0., 1.), (1.9, 10.), (3.8, 20.)))]
+    for ordered in permutations(candidates):
+        assert select_wormhole_candidate(ordered, 1, 'low')['miss_distance'] == 1.9
 
 
 def test_fixed_power_solver_returns_low_and_high_arcs_for_level_target():
@@ -33,6 +43,8 @@ def test_wormhole_solver_returns_verified_single_portal_shot():
     assert result["status"] == "reachable"
     assert result["portal_count"] in {1, 2}
     assert result["events"][-1] == "target"
+    assert result['miss_distance'] < 24
+    assert result['reflection_count'] == 0
 
 
 def test_wormhole_solver_keeps_high_power_vertical_portal_candidates():

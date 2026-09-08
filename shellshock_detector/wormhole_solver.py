@@ -7,7 +7,8 @@ from itertools import product
 from typing import Iterable
 
 from .ballistics import GRAVITY_AT_REFERENCE, REFERENCE_WIDTH, SPEED_PER_POWER_AT_REFERENCE, WIND_ACCELERATION_PER_UNIT_AT_REFERENCE
-from .projectile_events import advance_through_world
+from .portal_replay import replay_portal_shot
+from .solver_config import INTEGER_ANGLE_RADIUS, MISS_TIE_THRESHOLD_AT_REFERENCE, portal_trigger_radius, portal_avoid_radius
 from .world_geometry import Point, Portal, PortalPair, World
 
 EPSILON = 1e-8
@@ -157,6 +158,17 @@ def _portal_sequence(world: World, replay: object) -> tuple[str, ...]:
     return tuple(sequence)
 
 
+def select_wormhole_candidate(candidates, scale, arc_preference):
+    """Rank the entire selected-power pool against one global miss threshold."""
+    minimum_miss = min(c['miss_distance'] for c in candidates)
+    reliable = [c for c in candidates if c['miss_distance'] <= minimum_miss + MISS_TIE_THRESHOLD_AT_REFERENCE*scale]
+    def key(c):
+        quality = ((-c['angle_degrees'], -c['clearance'], c['miss_distance']) if arc_preference == 'high'
+                   else (-c['clearance'], c['miss_distance'], c['portal_count'], c['angle_degrees']))
+        return (*quality, c['direction'], tuple(c['portal_sequence']))
+    return min(reliable, key=key)
+
+
 def solve_wormhole_integer_shot(source: Point, target: Point, world: World, wind_value: float, wind_direction: str, image_width: int, *, arc_preference: str = "low") -> dict[str, object]:
     if arc_preference not in {"low", "high"}:
         raise ValueError("arc_preference must be 'low' or 'high'")
@@ -167,6 +179,7 @@ def solve_wormhole_integer_shot(source: Point, target: Point, world: World, wind
     speed_per_power = SPEED_PER_POWER_AT_REFERENCE * scale
     entries = _entries(world.portal_pairs)
     best: dict[str, object] | None = None
+    selected_power_candidates = []
     cache: dict[tuple[float, float, int], tuple[WormholeTrajectory, ...]] = {}
     for hops in (1, 2):
         for planned in product(entries, repeat=hops):
@@ -178,31 +191,38 @@ def solve_wormhole_integer_shot(source: Point, target: Point, world: World, wind
             # direct solution is therefore not a safe upper bound: search all
             # playable powers, pruning only after a verified lower-power shot.
             powers = (range(max(1, minimum), min(100, int(best["power"]) if best else 100) + 1)
-                      if arc_preference == "low" else range(100, max(1, minimum) - 1, -1))
+                      if arc_preference == "low" else range(100, max(1, minimum, int(best['power']) if best else 1) - 1, -1))
             for power in powers:
-                trajectories = cache.setdefault((shift[0], shift[1], power), solve_ballistic_for_speed(source, virtual, acceleration, power * speed_per_power))  # type: ignore[arg-type]
+                key = (shift[0], shift[1], power)
+                if key not in cache:
+                    cache[key] = solve_ballistic_for_speed(source, virtual, acceleration, power * speed_per_power)
+                trajectories = cache[key]
+                legal = []
                 for trajectory in trajectories:
-                    first_entry = first_circle_entry_time(trajectory, planned[0].entry.center, planned[0].entry.radius, 0.0, trajectory.flight_time)
+                    first_entry = first_circle_entry_time(trajectory, planned[0].entry.center, portal_trigger_radius(planned[0].entry), 0.0, trajectory.flight_time)
                     if first_entry is None:
                         continue
                     raw_angle = degrees(atan2(-trajectory.velocity[1], abs(trajectory.velocity[0])))
                     if not 0 <= raw_angle <= 90:
                         continue
                     direction = "right" if trajectory.velocity[0] >= 0 else "left"
-                    for angle in sorted({max(0, min(90, round(raw_angle) + delta)) for delta in (-1, 0, 1)}):
+                    for angle in sorted({max(0, min(90, round(raw_angle) + delta)) for delta in range(-INTEGER_ANGLE_RADIUS, INTEGER_ANGLE_RADIUS + 1)}):
                         velocity = (power * speed_per_power * (1 if direction == "right" else -1) * cos(radians(angle)), -power * speed_per_power * sin(radians(angle)))
-                        replay = advance_through_world(source, velocity, acceleration, world, 12.0, target, 24 * scale)
-                        sequence = _portal_sequence(world, replay)
                         wanted = tuple(item.portal_id for item in planned)
-                        if replay.terminal_kind != "target" or sequence != wanted:
+                        replay = replay_portal_shot(source, velocity, acceleration, world, target, image_width, wanted)
+                        if not replay.valid:
                             continue
-                        candidate = {"status": "reachable", "direction": direction, "angle_degrees": angle, "power": power, "portal_count": len(sequence), "portal_sequence": list(sequence), "events": [event.kind for event in replay.events]}
-                        candidate_key = ((power, len(sequence), angle, direction) if arc_preference == "low"
-                                         else (-power, -angle, len(sequence), direction))
-                        best_key = ((int(best["power"]), int(best["portal_count"]), int(best["angle_degrees"]), str(best["direction"]))
-                                    if arc_preference == "low" else (-int(best["power"]), -int(best["angle_degrees"]), int(best["portal_count"]), str(best["direction"]))) if best else None
-                        if best_key is None or candidate_key < best_key:
-                            best = candidate
-                if arc_preference == "low" and best and power >= int(best["power"]):
+                        legal.append({"status": "reachable", "direction": direction, "angle_degrees": angle, "power": power,
+                                      "portal_count": len(wanted), "portal_sequence": list(wanted), "reflection_count": 0,
+                                      "events": ['portal']*len(wanted)+['target'], 'miss_distance': replay.miss_distance,
+                                      'clearance': replay.clearance, 'flight_time_seconds': replay.time,
+                                      'portal_radii': [{'id': e.portal_id, 'visual': e.entry.radius,
+                                                        'trigger': portal_trigger_radius(e.entry),
+                                                        'avoid': portal_avoid_radius(e.entry, scale)} for e in planned]})
+                if legal:
+                    if best is None or best['power'] != power:
+                        selected_power_candidates = []
+                    selected_power_candidates.extend(legal)
+                    best = select_wormhole_candidate(selected_power_candidates, scale, arc_preference)
                     break
     return best or {"status": "unreachable", "reason": "no-verified-wormhole-shot"}
