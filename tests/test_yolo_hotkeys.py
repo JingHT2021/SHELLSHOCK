@@ -1,5 +1,5 @@
 from detect_shellshock_yolo import (
-    DEFAULT_WEIGHTS, EXIT_HOTKEY, format_aim_report, format_solver_diagnostics, select_mode,
+    DEFAULT_WEIGHTS, EXIT_HOTKEY, display_mode, format_aim_report, format_solver_diagnostics, select_mode,
 )
 
 
@@ -20,6 +20,11 @@ def test_page_keys_keep_wormhole_family_when_wormhole_is_selected():
 def test_page_keys_preserve_reflection_family():
     assert select_mode('page up', 'reflection_low') == 'reflection_high'
     assert select_mode('page down', 'reflection_high') == 'reflection_low'
+
+
+def test_reflection_mode_has_one_user_facing_name():
+    assert display_mode('reflection_low') == 'reflection'
+    assert display_mode('reflection_high') == 'reflection'
 
 
 def test_delete_is_the_only_declared_exit_hotkey():

@@ -32,6 +32,10 @@ def select_mode(key: str, current_mode: str = "normal_low") -> str:
     return f"{family}_{'high' if key == 'page up' else 'low'}"
 
 
+def display_mode(mode: str) -> str:
+    return "reflection" if mode_parts(mode)[0] == "reflection" else mode
+
+
 def format_aim_report(mode: str, solution: dict[str, object], wind_value: int | float | None, wind_direction: str | None, click: tuple[int, int]) -> str:
     wind = f"{wind_value if wind_value is not None else 0:>2} {wind_direction or 'right':<5}"
     controls = f"\x1b[31m({int(solution['power']):>3}, {int(solution['angle_degrees']):>3}°)\x1b[0m"
@@ -45,7 +49,7 @@ def format_aim_report(mode: str, solution: dict[str, object], wind_value: int | 
         if reflections and isinstance(reflection_obstacle, dict) else
         f"REFLECTIONS {reflections:>2} @ {reflection_point}" if reflections else "REFLECTIONS  0"
     )
-    lines = [f"MODE {mode:<9} WIND {wind}  {controls}",
+    lines = [f"MODE {display_mode(mode):<9} WIND {wind}  {controls}",
              f"PORTALS {portals:>2}  {reflection}  EVENTS {events:<24} CLICK {click}"]
     metrics = []
     for field, label, precision, suffix in (
@@ -123,7 +127,7 @@ def main() -> None:
         nonlocal mode, final_manager
         mode = value
         final_manager = None
-        print(f"Mode: {mode}", flush=True)
+        print(f"Mode: {display_mode(mode)}", flush=True)
 
     def switch_final_candidate(delta: int) -> None:
         nonlocal final_manager
@@ -157,7 +161,7 @@ def main() -> None:
                     print(f"Capture: {capture_fixed_screen(args.capture_dir, region=region, stem=capture_stem)}", flush=True)
                 except (OSError, RuntimeError, ValueError) as error:
                     print(f"Capture skipped: {error}", flush=True)
-            print(f"Searching {mode} shot...", flush=True)
+            print(f"Searching {display_mode(mode)} shot...", flush=True)
             hwnd = find_game_window()
             origin, size = client_screen_geometry(hwnd)
             target = screen_to_client_point(win32api.GetCursorPos(), origin, size)
@@ -229,7 +233,7 @@ def main() -> None:
     keyboard.add_hotkey("caps lock", toggle_capture)
     keyboard.add_hotkey("t", lambda: choose("normal_low"))
     keyboard.add_hotkey("h", lambda: choose("wormhole_low"))
-    keyboard.add_hotkey("r", lambda: choose("reflection_low"))
+    keyboard.add_hotkey("r", lambda: choose("reflection"))
     keyboard.add_hotkey("page up", lambda: switch_final_candidate(-1))
     keyboard.add_hotkey("page down", lambda: switch_final_candidate(1))
     keyboard.add_hotkey(EXIT_HOTKEY, lambda: print("Exiting YOLO aim...", flush=True))
