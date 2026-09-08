@@ -7,16 +7,16 @@ from pathlib import Path
 import keyboard
 import win32api
 
-from shellshock_detector.aiming import disc_click_point
-from shellshock_detector.app import (
+from shellshock_detector_yolo.aiming import disc_click_point
+from shellshock_detector_yolo.desktop import (
     capture_client_area, client_screen_geometry, click_screen_point,
     ensure_game_window_is_active, find_game_window, screen_to_client_point,
 )
-from shellshock_detector.global_solver import solve_integer_shot
-from shellshock_detector.shot_modes import mode_parts, normalize_mode
-from shellshock_detector.yolo_runtime import YoloDetector
-from shellshock_detector.world_geometry import build_world_from_image
-from shellshock_detector.wind import detect_wind
+from shellshock_detector_yolo.global_solver import solve_integer_shot
+from shellshock_detector_yolo.shot_modes import mode_parts, normalize_mode
+from shellshock_detector_yolo.yolo_runtime import YoloDetector
+from shellshock_detector_yolo.world_geometry import build_world_from_image
+from shellshock_detector_yolo.wind import detect_wind
 
 DEFAULT_WEIGHTS = Path("train/runs/shellshock_yolo11n_cv65_final_all/weights/best.pt")
 EXIT_HOTKEY = "delete"
@@ -54,11 +54,50 @@ def format_aim_report(mode: str, solution: dict[str, object], wind_value: int | 
             metrics.append(f"{label} {float(solution[field]):.{precision}f}{suffix}")
     if metrics:
         lines.append('  '.join(metrics))
+    timing = solution.get('timing')
+    if isinstance(timing, dict):
+        lines.append(
+            "TIME A {:.1f}ms B {:.1f}ms C1 {:.1f}ms C2 {:.1f}ms TOTAL {:.1f}ms".format(
+                1000 * float(timing.get('layer_a_seconds', 0.0)),
+                1000 * float(timing.get('layer_b_seconds', 0.0)),
+                1000 * float(timing.get('layer_c1_seconds', 0.0)),
+                1000 * float(timing.get('layer_c2_seconds', 0.0)),
+                1000 * float(timing.get('total_seconds', 0.0)),
+            )
+        )
     for portal in solution.get('portal_radii', ()):
         lines.append(f"PORTAL {portal['id']} VISUAL {portal['visual']:.2f} TRIGGER {portal['trigger']:.2f} AVOID {portal['avoid']:.2f}")
     if solution.get('arc_fallback'):
         lines.append(f"single reflection solution: using {solution.get('selected_arc', 'available')} endpoint")
     return '\n'.join(lines)
+
+
+def format_solver_diagnostics(diagnostics: dict[str, object], *, line_count: int = 0, circle_count: int = 0) -> str:
+    timing = diagnostics.get('timing') if isinstance(diagnostics.get('timing'), dict) else {}
+    a_reasons = diagnostics.get('layer_a_invalid_reasons') or {}
+    b_reasons = diagnostics.get('layer_b_invalid_reasons') or {}
+    b_soft_reasons = diagnostics.get('layer_b_soft_invalid_reasons') or {}
+    reasons = [f"{key}={value}" for key, value in sorted({
+        **a_reasons, **b_reasons, **{f"SOFT_{key}": value for key, value in b_soft_reasons.items()}
+    }.items())]
+    time_text = "TIME A {:.1f}ms B {:.1f}ms C1 {:.1f}ms C2 {:.1f}ms TOTAL {:.1f}ms".format(
+        1000 * float(timing.get('layer_a_seconds', 0.0)),
+        1000 * float(timing.get('layer_b_seconds', 0.0)),
+        1000 * float(timing.get('layer_c1_seconds', 0.0)),
+        1000 * float(timing.get('layer_c2_seconds', 0.0)),
+        1000 * float(timing.get('total_seconds', diagnostics.get('total_seconds', 0.0))),
+    )
+    return '\n'.join((
+        f"OBSTACLES lines={line_count} circles={circle_count}",
+        "STAGES A_passed={} B_passed={} C_raw={} C_unique={} replays={} failed={}".format(
+            diagnostics.get('layer_a_passed', 0), diagnostics.get('layer_b_passed', 0),
+            diagnostics.get('integer_candidates_raw', 0), diagnostics.get('integer_candidates_unique', 0),
+            diagnostics.get('integer_full_replays', diagnostics.get('full_replays', 0)),
+            diagnostics.get('integer_replay_failed', 0),
+        ),
+        f"REASONS {' '.join(reasons) if reasons else 'none'}",
+        time_text,
+    ))
 
 
 def main() -> None:
@@ -85,7 +124,7 @@ def main() -> None:
             world = build_world_from_image(detections, image)
             orange = sum(box.name == "portal_orange" for box in detections)
             blue = sum(box.name == "portal_blue" for box in detections)
-            print(f"World: self={'yes' if world.self_position else 'no'}; portals orange={orange}, blue={blue}, pairs={len(world.portal_pairs)}, unpaired={world.unpaired_portals}", flush=True)
+            print(f"World: self={'yes' if world.self_position else 'no'}; obstacles lines={len(world.lines)}, circles={len(world.circles)}; portals orange={orange}, blue={blue}, pairs={len(world.portal_pairs)}, unpaired={world.unpaired_portals}", flush=True)
             if world.self_position is None:
                 raise RuntimeError("YOLO did not find one unambiguous self tank")
             wind, _, _ = detect_wind(image)
@@ -97,7 +136,8 @@ def main() -> None:
                     "no-portal-pair": "YOLO did not produce a usable orange/blue portal pair",
                     "no-verified-wormhole-shot": "portals were found, but no collision-free one/two-hop shot was verified",
                 }
-                raise RuntimeError(f"no safe {mode} shot: {messages.get(reason, reason)}")
+                details = format_solver_diagnostics(solution.get('diagnostics', {}), line_count=len(world.lines), circle_count=len(world.circles))
+                raise RuntimeError(f"no safe {mode} shot: {messages.get(reason, reason)}\n{details}")
             click = disc_click_point(*world.self_position, str(solution["direction"]), float(solution["angle_degrees"]), float(solution["power"]), image.shape[1])
             if not (0 <= click[0] < size[0] and 0 <= click[1] < size[1]):
                 raise RuntimeError("aim disc point is outside game client")

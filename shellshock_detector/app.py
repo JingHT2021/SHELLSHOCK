@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 from PIL import ImageGrab
 import win32gui
+import pywintypes
 import win32process
 import win32api
 import win32con
@@ -259,7 +260,7 @@ def ensure_game_window_is_active(
         raise RuntimeError("aim skipped: ShellShock Live window was closed")
     try:
         activate(hwnd)
-    except OSError:
+    except (OSError, pywintypes.error):
         # Windows can reject foreground activation from the global keyboard
         # listener thread even while the already-captured game window is valid.
         # The caller still targets that verified window's screen coordinates.
