@@ -164,9 +164,10 @@ def evaluate_layer_b(candidates: Iterable[object], source, target, world, accele
                 coverage_weight = (LAYER_B_CIRCLE_COVERAGE_WEIGHT if item["coarse"].family.kind == "circle"
                                    else LAYER_B_LINE_COVERAGE_WEIGHT)
                 score += coverage_weight * (1.0 - valid_count / max(1, sample_total))
-                if item["coarse"].route.has_portals:
+                if item["coarse"].route.has_portals and validation is not None:
                     score += LAYER_B_PORTAL_DEPTH_WEIGHT * (1.0 - min(1.0, validation.planned_portal_depth))
-                score += clearance_penalty(validation.min_unplanned_clearance)
+                if validation is not None:
+                    score += clearance_penalty(validation.min_unplanned_clearance)
             branch_candidates.append(LayerBProxyCandidate(
                 coarse=item["coarse"], solution=solution, branch=item["branch"], score_b=score,
                 root_stability=item["root_stability"],

@@ -29,6 +29,21 @@ def test_layer_c_uses_seven_local_surface_samples():
                                                    0.5, 0.5416666666666666, 0.5833333333333333, 0.625]
 
 
+def test_layer_c_uses_layer_b_circle_seed_when_solution_parameter_is_default():
+    from shellshock_detector_yolo.reflection_layer_c import build_surface_interval
+
+    family = SimpleNamespace(kind="circle", lower=0.0, upper=6.283185307179586)
+    proxy = SimpleNamespace(
+        coarse=SimpleNamespace(family=family, q_seed=1.2),
+        solution=SimpleNamespace(parameter=0.0),
+    )
+
+    lower, upper = build_surface_interval(proxy)
+
+    assert lower == 1.2 - 0.2617993877991494 / 2
+    assert upper == 1.2 + 0.2617993877991494 / 2
+
+
 def test_layer_c_generates_power_and_angle_crossing_candidates():
     from shellshock_detector_yolo.reflection_layer_c import generate_integer_candidates
 

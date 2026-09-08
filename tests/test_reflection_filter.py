@@ -183,6 +183,26 @@ def test_layer_b_neighbor_coverage_counts_failed_samples():
     assert proxies[0].neighborhood_sample_count == 3
 
 
+def test_layer_b_handles_circle_side_soft_invalid_without_crashing():
+    from shellshock_detector_yolo.reflection_filter import CoarsePathCandidate, rank_proxy_candidates
+
+    family = Family("circle", 0, side="INNER")
+    candidate = CoarsePathCandidate(family, ReflectionRoute(), 0.0, (20, 0), (1, 0), ())
+    world = World(circles=(CircleObstacle((0, 0), 20),))
+
+    def fixed_solver(source, target, contact, normal, acceleration, speed_per_power):
+        return [SimpleNamespace(contact=contact, normal=normal, velocity=(-1, 0), t1=10, t2=10,
+                                power=20, angle_degrees=45, incidence=1)]
+
+    proxies, diagnostics = rank_proxy_candidates(
+        (candidate,), (0, 0), (0, 0), world, (0, 0), 1, fixed_solver,
+        lambda solution, coarse: solution.power, top_k=4, image_width=1920,
+    )
+
+    assert len(proxies) == 1
+    assert diagnostics["soft_invalid_reasons"]["B_CIRCLE_SIDE"] == 3
+
+
 def test_layer_a_fair_prefix_does_not_let_first_reflector_monopolize_limit():
     from shellshock_detector_yolo.reflection_filter import CoarsePathCandidate, fair_candidate_prefix
 

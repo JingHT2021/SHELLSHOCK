@@ -76,7 +76,7 @@ class FinalReplayResult:
 def build_surface_interval(proxy, *, line_parameters=LAYER_B_LINE_PARAMETERS):
     """Return the local Layer-C interval around one Layer-B surface sample."""
     family = proxy.coarse.family
-    parameter = float(getattr(proxy.solution, "parameter", getattr(proxy.coarse, "q_seed", 0.0)))
+    parameter = float(getattr(proxy.coarse, "q_seed", getattr(proxy.solution, "parameter", 0.0)))
     if family.kind == "line":
         points = sorted(float(p) for p in line_parameters if family.lower <= p <= family.upper)
         if not points:
