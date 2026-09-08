@@ -128,6 +128,9 @@ def main() -> None:
     def switch_final_candidate(delta: int) -> None:
         nonlocal final_manager
         if mode_parts(mode)[0] != "reflection" or final_manager is None:
+            if mode_parts(mode)[0] == "reflection":
+                print("No active reflection candidates; press E to calculate first", flush=True)
+                return
             choose(select_mode("page up" if delta < 0 else "page down", mode))
             return
         result = final_manager.switch(delta)
