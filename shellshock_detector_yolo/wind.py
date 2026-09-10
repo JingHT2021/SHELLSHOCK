@@ -11,6 +11,8 @@ import pytesseract
 from .models import Wind
 from shellshock_detector.digit_recognizer import recognize_digits, recognize_trained_digits
 
+TRAINED_DIGIT_CONFIDENCE_THRESHOLD = 0.50
+
 
 def _configure_tesseract() -> None:
     if which("tesseract"):
@@ -75,7 +77,7 @@ def _number_from_panel(panel: np.ndarray) -> int | None:
     # the complete HUD panel preserves the cloud background context and avoids
     # the legacy tight crop trimming anti-aliased digit edges.
     trained_value, trained_confidence = recognize_trained_digits(panel)
-    if trained_value is not None and trained_confidence >= 0.75:
+    if trained_value is not None and trained_confidence >= TRAINED_DIGIT_CONFIDENCE_THRESHOLD:
         try:
             value = int(trained_value)
             if 0 <= value <= 100:

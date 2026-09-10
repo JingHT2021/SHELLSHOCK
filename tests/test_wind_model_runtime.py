@@ -3,6 +3,7 @@ from pathlib import Path
 import cv2
 
 from shellshock_detector import digit_recognizer
+from shellshock_detector_yolo.wind import detect_wind
 
 
 def test_runtime_model_recognizes_known_wind_digit():
@@ -18,3 +19,10 @@ def test_runtime_model_returns_unavailable_for_empty_input(monkeypatch):
     value, confidence = digit_recognizer.recognize_trained_digits(None)
     assert value is None
     assert confidence == 0.0
+
+
+def test_wind_runtime_keeps_trained_39_instead_of_template_99():
+    image = cv2.imread("train/annotate_check/images/20260909_214248_652422.png")
+    wind, error, _ = detect_wind(image)
+    assert error is None
+    assert wind.value == 39
