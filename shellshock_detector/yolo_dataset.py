@@ -96,10 +96,15 @@ def parse_yolo_label_text(
             continue
         left, top = center_x - width / 2, center_y - height / 2
         right, bottom = center_x + width / 2, center_y + height / 2
-        if left < 0 or top < 0 or right > 1 or bottom > 1:
+        # Six-decimal YOLO serialization can put an edge a few ulps outside
+        # the image (for example 1.0000005). Accept only this rounding noise
+        # and clip it; genuinely invalid boxes remain rejected.
+        epsilon = 2e-6
+        if left < -epsilon or top < -epsilon or right > 1 + epsilon or bottom > 1 + epsilon:
             errors.append(f"{prefix}:box_outside_image")
             continue
-        boxes.append(YoloBox(class_id, center_x, center_y, width, height))
+        left, top, right, bottom = max(0., left), max(0., top), min(1., right), min(1., bottom)
+        boxes.append(YoloBox(class_id, (left + right) / 2, (top + bottom) / 2, right - left, bottom - top))
     return boxes, errors
 
 

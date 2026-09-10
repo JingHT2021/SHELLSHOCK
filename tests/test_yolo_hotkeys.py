@@ -1,6 +1,9 @@
+from pathlib import Path
+
 from detect_shellshock_yolo import (
     DEFAULT_WEIGHTS, EXIT_HOTKEY, display_mode, format_aim_report, format_normal_diagnostics,
-    format_solver_diagnostics, select_mode,
+    format_solver_diagnostics, format_solver_summary, select_mode,
+    write_reflection_diagnostics_log,
 )
 
 
@@ -97,6 +100,63 @@ def test_solver_diagnostics_report_obstacles_stages_and_timing():
     assert 'STAGES A_passed=17 B_passed=10 C_raw=42 C_unique=19 replays=10 failed=10' in text
     assert 'REASONS A_SEGMENT_DIRECTION=3 B_WRONG_FIRST_COLLISION=8 SOFT_B_PLANNED_PORTAL_MISS=4' in text
     assert 'TIME A 10.0ms B 20.0ms C1 30.0ms C2 40.0ms TOTAL 100.0ms' in text
+
+
+def test_solver_diagnostics_reports_full_portal_route_trace():
+    text = format_solver_diagnostics({
+        'layer_a_route_trace': [{
+            'route': ['0:orange'], 'status': 'FAIL',
+            'reason': 'A_SEGMENT_DIRECTION',
+            'segments': [{'name': 'current_to_portal_entry', 'status': 'FAIL',
+                          'reason': 'A_SEGMENT_DIRECTION'}],
+        }],
+    })
+
+    assert 'PORTAL_A_TRACE total=1' in text
+    assert 'route=[0:orange] FAIL A_SEGMENT_DIRECTION' in text
+    assert 'current_to_portal_entry FAIL A_SEGMENT_DIRECTION' in text
+
+
+def test_solver_summary_keeps_terminal_output_compact():
+    text = format_solver_summary({
+        'layer_a_passed': 17,
+        'layer_b_passed': 10,
+        'integer_candidates_raw': 42,
+        'integer_candidates_unique': 19,
+        'integer_full_replays': 10,
+        'integer_replay_failed': 10,
+        'layer_a_invalid_reasons': {'A_SEGMENT_DIRECTION': 3},
+        'timing': {'total_seconds': .10},
+        'layer_a_trace': [{'id': 'A:0', 'status': 'FAIL'}],
+        'layer_b_trace': [{'id': 'B:0', 'status': 'FAIL'}],
+        'layer_c1_trace': [{'id': 'C1:0', 'status': 'FAIL'}],
+        'layer_c2_trace': [{'id': 'C2:0', 'status': 'FAIL'}],
+        'final_trace': [{'id': 'FINAL:integer=(42,46)', 'status': 'PASS'}],
+    })
+
+    assert 'STAGES A_passed=17 B_passed=10 C_raw=42 C_unique=19 replays=10 failed=10' in text
+    assert 'REASONS A_SEGMENT_DIRECTION=3' in text
+    assert 'A_TRACE' not in text
+    assert 'B_TRACE' not in text
+    assert 'C1_TRACE' not in text
+    assert 'C2_TRACE' not in text
+    assert 'FINAL_TRACE' not in text
+
+
+def test_reflection_diagnostics_writer_preserves_detailed_trace():
+    log_dir = Path('.codex_tmp') / 'reflection-log-test'
+    try:
+        path = write_reflection_diagnostics_log({
+            'layer_a_trace': [{'id': 'A:0', 'status': 'FAIL', 'reason': 'A_SEGMENT_DIRECTION'}],
+        }, log_dir=log_dir)
+
+        assert path.parent == log_dir.resolve()
+        assert path.suffix == '.log'
+        assert 'A_TRACE total=1' in path.read_text(encoding='utf-8')
+    finally:
+        for path in log_dir.glob('*.log'):
+            path.unlink()
+        log_dir.rmdir()
 
 
 def test_normal_diagnostics_report_target_theory_and_rejections():

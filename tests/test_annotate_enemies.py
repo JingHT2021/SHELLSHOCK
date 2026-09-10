@@ -1,7 +1,8 @@
 import cv2
+import json
 import numpy as np
 
-from annotate_enemies import (
+from label_yolo_captures import (
     CLASS_KEY_MAP,
     CircleAnnotation,
     build_parser,
@@ -11,6 +12,9 @@ from annotate_enemies import (
     key_action,
     select_images,
     write_enemy_supplement,
+    _save_state,
+    _center_click_action,
+    _adjust_circle_radius,
 )
 
 
@@ -44,6 +48,7 @@ def test_key_action_maps_arrow_and_escape_keys():
     assert key_action(81) == "previous"
     assert key_action(83) == "next"
     assert key_action(27) == "quit"
+    assert key_action(13) == "accept"
 
 
 def test_parser_can_select_every_image_in_a_custom_review_directory():
@@ -53,6 +58,13 @@ def test_parser_can_select_every_image_in_a_custom_review_directory():
 
     assert str(args.raw_dir) == "train\\review_portal_mismatch"
     assert args.all_images is True
+
+
+def test_parser_enables_yolo_prelabeling_by_default():
+    args = build_parser().parse_args([])
+
+    assert args.no_yolo_prelabel is False
+    assert str(args.weights).endswith("shellshock_yolo11n_pose_v1\\weights\\best.pt")
 
 
 def test_numeric_keys_select_all_requested_classes():
@@ -68,7 +80,50 @@ def test_circle_is_saved_as_clipped_square_yolo_box():
     assert line == "7 0.275000 0.343750 0.550000 0.687500"
 
 
+def test_self_center_is_written_to_label_file_and_geometry(tmp_path):
+    labels = tmp_path / "scene.txt"
+    geometry = tmp_path / "scene.json"
+    _save_state(labels, geometry, [], [], 100, 80, (50, 40), None)
+    assert labels.read_text(encoding="utf-8").split()[0] == "1"
+    assert json.loads(geometry.read_text(encoding="utf-8"))["self_center"] == [50, 40]
+
+
+def test_offscreen_circle_keeps_full_geometry_without_save_error(tmp_path):
+    labels = tmp_path / "scene.txt"
+    geometry = tmp_path / "scene.json"
+    _save_state(
+        labels,
+        geometry,
+        [CircleAnnotation(3, -10, 40, 30), CircleAnnotation(5, -50, 40, 10)],
+        [],
+        100,
+        80,
+        None,
+        None,
+    )
+
+    payload = json.loads(geometry.read_text(encoding="utf-8"))
+    assert payload["circles"] == [
+        {"class_id": 3, "center": [-10, 40], "radius": 30},
+        {"class_id": 5, "center": [-50, 40], "radius": 10},
+    ]
+    assert labels.read_text(encoding="utf-8").startswith("3 ")
+
+
 def test_right_click_deletes_nearest_matching_annotation_only():
     annotations = [CircleAnnotation(0, 10, 10, 10), CircleAnnotation(1, 12, 10, 10), CircleAnnotation(0, 80, 80, 10)]
     remaining = delete_nearest_annotation(annotations, 11, 10, 0)
     assert remaining == [CircleAnnotation(1, 12, 10, 10), CircleAnnotation(0, 80, 80, 10)]
+
+
+def test_center_key_click_wins_over_existing_self_box():
+    circles = [CircleAnnotation(2, 50, 40, 30)]
+
+    assert _center_click_action(1, None, circles, 50, 40) == "set_center"
+
+
+def test_radius_adjustment_ignores_deleted_circle_selection():
+    circles, selected = _adjust_circle_radius([], ("circle", 0), -2)
+
+    assert circles == []
+    assert selected is None

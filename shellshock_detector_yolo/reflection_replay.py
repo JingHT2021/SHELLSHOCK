@@ -9,6 +9,7 @@ from .ballistics import SPEED_PER_POWER_AT_REFERENCE, _scale
 from .solver_config import (
     MAX_FLIGHT_TIME, LINE_ENDPOINT_MARGIN_AT_REFERENCE, REFLECTION_MIN_INCIDENCE,
     TARGET_ACCEPT_RADIUS_AT_REFERENCE, EQUATION_RESIDUAL_TOL, CIRCLE_SIDE_EPS,
+    allowed_circle_sides,
 )
 from .collision import closest_approach_to_target, find_first_collision, trajectory_clearance
 
@@ -17,8 +18,8 @@ def source_matches_circle_side(source, world, family):
     if family.kind != 'circle':
         return True
     circle = world.circles[family.index]
-    distance = float(np.linalg.norm(np.asarray(source)-circle.center))
-    return distance < circle.radius-CIRCLE_SIDE_EPS if family.side == 'INNER' else distance > circle.radius+CIRCLE_SIDE_EPS
+    scale = (world.image_width or 1920) / 1920
+    return family.side in allowed_circle_sides(source, circle, scale)
 
 
 def verify_continuous_contact(source, world, acceleration, image_width, family, solution):
@@ -39,7 +40,8 @@ def verify_continuous_contact(source, world, acceleration, image_width, family, 
                                 avoid_portals=True, image_width=image_width) is None
 
 
-def replay_integer_contact(source, target, world, acceleration, image_width, family, power, angle_degrees, direction):
+def replay_integer_contact(source, target, world, acceleration, image_width, family, power, angle_degrees, direction,
+                           *, target_accept_radius=None):
     if not source_matches_circle_side(source, world, family):
         return None
     scale = _scale(image_width)
@@ -76,7 +78,9 @@ def replay_integer_contact(source, target, world, acceleration, image_width, fam
     if remaining <= 1e-5:
         return None
     miss, target_time, closest = closest_approach_to_target(contact, outgoing, acceleration, target, remaining)
-    if miss > TARGET_ACCEPT_RADIUS_AT_REFERENCE*scale or target_time <= 1e-5:
+    target_radius = (TARGET_ACCEPT_RADIUS_AT_REFERENCE if target_accept_radius is None
+                     else target_accept_radius)
+    if miss > target_radius*scale or target_time <= 1e-5:
         return None
     # The intended reflecting surface remains active: an inner-circle exit or
     # a return to the same line is a second collision and invalidates the shot.
@@ -96,6 +100,7 @@ def replay_integer_contact(source, target, world, acceleration, image_width, fam
         'reflection_obstacle': {'kind': family.kind, 'index': family.index},
         'reflection_side': family.side,
         'miss_distance': float(miss), 'clearance': float(clearance),
+        'target_accept_radius': float(target_radius * scale),
         'flight_time_seconds': float(collision.time+target_time),
         'incidence': incidence, 'closest_target_point': tuple(float(x) for x in closest),
         'actual_v_before': tuple(float(x) for x in incoming),

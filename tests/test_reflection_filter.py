@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from shellshock_detector_yolo.reflection_routes import ReflectionRoute
-from shellshock_detector_yolo.coarse_path_filter import CoarsePathResult
+from shellshock_detector_yolo.layer_a import CoarsePathResult
 from shellshock_detector_yolo.world_geometry import CircleObstacle, LineObstacle, Portal, PortalPair, World
 
 
@@ -27,6 +27,31 @@ def test_layer_a_reflection_uses_real_acceleration_without_virtual_height_or_sco
     assert candidates[0].events == ((0, 0), (10.0, 0.0), (-10, 0))
     assert not hasattr(candidates[0], "score_a")
     assert diagnostics["invalid_reasons"] == {}
+
+
+def test_layer_a_line_checks_endpoint_and_middle_channels(monkeypatch):
+    from shellshock_detector_yolo import reflection_filter as filter_module
+
+    checked = []
+    monkeypatch.setattr(filter_module, "reflection_path_possible",
+                        lambda source, contact, target, *args: (checked.append(contact) or CoarsePathResult(True, None, ())))
+    world = World(lines=(LineObstacle((0, 0), (60, 0)),))
+
+    candidates, _ = filter_module.build_coarse_candidates(
+        (10, 10), (50, 10), world, (Family("line", 0),), (ReflectionRoute(),), (0.0, 0.0)
+    )
+
+    assert [candidate.q_seed for candidate in candidates] == [0.0, 0.5, 1.0]
+    assert checked == [(0.0, 0.0), (30.0, 0.0), (60.0, 0.0)]
+
+
+def test_layer_b_line_parameters_depend_on_the_passing_layer_a_channel():
+    from shellshock_detector_yolo.reflection_filter import CoarsePathCandidate, _nearby_parameters
+
+    route = ReflectionRoute()
+    assert _nearby_parameters(CoarsePathCandidate(Family("line", 0), route, 0.0, (0, 0), (0, 1), ())) == (1 / 6,)
+    assert _nearby_parameters(CoarsePathCandidate(Family("line", 0), route, 0.5, (0, 0), (0, 1), ())) == (1 / 3, 0.5, 2 / 3)
+    assert _nearby_parameters(CoarsePathCandidate(Family("line", 0), route, 1.0, (0, 0), (0, 1), ())) == (5 / 6,)
 
 
 def test_layer_a_reflection_rejects_a_post_reflection_portal_leg_that_cannot_turn_back():
@@ -91,6 +116,29 @@ def test_layer_a_keeps_every_possible_circle_representative(monkeypatch):
     assert len(candidates) == 2
     assert len(checked) == 8
     assert {candidate.q_seed for candidate in candidates} == {0.0, 3.141592653589793 / 2}
+
+
+def test_layer_a_circle_side_policy_uses_inside_and_outside_margins(monkeypatch):
+    import shellshock_detector_yolo.reflection_filter as filter_module
+
+    monkeypatch.setattr(filter_module, "reflection_path_possible",
+                        lambda *args: CoarsePathResult(True, None, ()))
+    world = World(circles=(CircleObstacle((0, 0), 20),))
+    families = (Family("circle", 0, "INNER"), Family("circle", 0, "OUTER"))
+
+    far, _ = filter_module.build_coarse_candidates(
+        (100, 0), (200, 0), world, families, (ReflectionRoute(),), (0.0, 0.0)
+    )
+    near, _ = filter_module.build_coarse_candidates(
+        (30, 0), (200, 0), world, families, (ReflectionRoute(),), (0.0, 0.0)
+    )
+    middle, _ = filter_module.build_coarse_candidates(
+        (50, 0), (200, 0), world, families, (ReflectionRoute(),), (0.0, 0.0)
+    )
+
+    assert {candidate.family.side for candidate in far} == {"OUTER"}
+    assert {candidate.family.side for candidate in near} == {"INNER"}
+    assert {candidate.family.side for candidate in middle} == {"INNER", "OUTER"}
 
 
 def test_layer_b_keeps_wrong_first_collision_as_soft_diagnostic_for_layer_c():
@@ -160,6 +208,30 @@ def test_layer_b_clearance_penalty_prefers_wider_margins():
     assert clearance_penalty(0.1) > clearance_penalty(10)
 
 
+def test_layer_b_scoring_does_not_use_clearance_penalty(monkeypatch):
+    import shellshock_detector_yolo.reflection_proxy as proxy_module
+    from shellshock_detector_yolo.reflection_filter import CoarsePathCandidate, rank_proxy_candidates
+
+    family = Family("line", 0)
+    candidate = CoarsePathCandidate(family, ReflectionRoute(), 0.5, (10, 0), (-1, 0), ())
+    world = World(lines=(LineObstacle((10, -20), (10, 20)),))
+
+    def fixed_solver(source, target, contact, normal, acceleration, speed_per_power):
+        return [SimpleNamespace(contact=contact, normal=normal, velocity=(1, 0), t1=10, t2=10,
+                                power=20, angle_degrees=0, incidence=1)]
+
+    monkeypatch.setattr(proxy_module, "clearance_penalty", lambda clearance: (_ for _ in ()).throw(
+        AssertionError("clearance must not influence Layer-B score")
+    ))
+
+    proxies, _ = rank_proxy_candidates(
+        (candidate,), (0, 0), (0, 0), world, (0, 0), 1, fixed_solver,
+        lambda solution, coarse: solution.power, top_k=4, image_width=1920,
+    )
+
+    assert len(proxies) == 1
+
+
 def test_layer_b_neighbor_coverage_counts_failed_samples():
     from shellshock_detector_yolo.reflection_filter import CoarsePathCandidate, rank_proxy_candidates
 
@@ -218,3 +290,21 @@ def test_layer_a_fair_prefix_does_not_let_first_reflector_monopolize_limit():
     assert {(candidate.family.kind, candidate.family.index) for candidate in selected} == {
         ("circle", 0), ("line", 1)
     }
+
+
+def test_layer_a_returns_full_per_seed_trace_instead_of_only_reason_counts():
+    from shellshock_detector_yolo.reflection_filter import build_coarse_candidates
+
+    world = World(lines=(LineObstacle((10, -10), (10, 10)),))
+    candidates, diagnostics = build_coarse_candidates(
+        (0, 0), (0, 0), world, (Family("line", 0),),
+        (ReflectionRoute(),), (0.0, 0.0)
+    )
+
+    trace = diagnostics["layer_a_trace"]
+    assert len(trace) == 3
+    assert [item["family"] for item in trace] == ["line#0", "line#0", "line#0"]
+    assert [item["parameter"] for item in trace] == [0.0, 0.5, 1.0]
+    assert {item["status"] for item in trace} <= {"PASS", "FAIL"}
+    assert {item["decision"] for item in trace} <= {"RETAINED", "REJECTED"}
+    assert all("path_diagnostics" in item for item in trace)

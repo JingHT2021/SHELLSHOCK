@@ -58,6 +58,20 @@ def test_wormhole_layer_a_rejects_an_ordered_portal_route_that_cannot_reach_its_
     assert result.reason == "A_SEGMENT_DIRECTION"
 
 
+def test_wormhole_solver_preserves_full_layer_a_route_trace():
+    from shellshock_detector_yolo.wormhole_solver import solve_wormhole_integer_shot
+
+    pair = PortalPair(Portal("orange", (220, 560), 35), Portal("blue", (650, 460), 35))
+    result = solve_wormhole_integer_shot((100, 700), (900, 700),
+                                         World(image_width=1920, image_height=1080, portal_pairs=[pair]),
+                                         0, "right", 1920)
+
+    trace = result["diagnostics"]["layer_a_route_trace"]
+    assert trace
+    assert all("segments" in item for item in trace)
+    assert any(item["status"] == "PASS" for item in trace)
+
+
 def test_wormhole_solver_keeps_high_power_vertical_portal_candidates():
     """A virtual target below the tank can still require a vertical climb first."""
     from shellshock_detector.wormhole_solver import solve_wormhole_integer_shot
@@ -93,3 +107,10 @@ def test_wormhole_solver_handles_four_pairs_within_one_second():
     started = perf_counter()
     solve_wormhole_integer_shot((80, 700), (1500, 700), World(image_width=1920, image_height=1080, portal_pairs=pairs), 0, "right", 1920)
     assert perf_counter() - started < 1.0
+
+
+def test_low_wormhole_search_starts_two_power_above_theoretical_minimum():
+    from shellshock_detector.wormhole_solver import _power_search_start
+
+    assert _power_search_start(41.2, "low") == 44
+    assert _power_search_start(41.2, "high") == 42

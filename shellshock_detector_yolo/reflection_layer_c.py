@@ -122,29 +122,20 @@ def generate_integer_candidates(samples, *, angle_range=(0, 90), power_range=(1,
     result = []
     for sample in valid:
         angle, power = _source_values(sample)
-        ai, pi_ = round(angle), round(power)
-        if angle_range[0] <= ai <= angle_range[1] and power_range[0] <= pi_ <= power_range[1]:
-            result.append(_candidate(sample, ai, pi_, "NEAREST_SAMPLE"))
-    for left, right in zip(valid, valid[1:]):
-        if getattr(left, "branch_id", None) != getattr(right, "branch_id", None):
-            continue
-        s0, s1 = float(left.surface_param), float(right.surface_param)
-        a0, p0 = _source_values(left)
-        a1, p1 = _source_values(right)
-        if p0 != p1:
-            for power in _integer_range_between(p0, p1, *power_range):
-                fraction = (power - p0) / (p1 - p0)
-                angle = a0 + fraction * (a1 - a0)
-                for integer_angle in {round(angle), floor(angle), ceil(angle)}:
-                    if angle_range[0] <= integer_angle <= angle_range[1]:
-                        result.append(_candidate(left, integer_angle, power, "POWER_CROSS"))
-        if a0 != a1:
-            for angle in _integer_range_between(a0, a1, *angle_range):
-                fraction = (angle - a0) / (a1 - a0)
-                power = p0 + fraction * (p1 - p0)
-                for integer_power in {round(power), floor(power), ceil(power)}:
-                    if power_range[0] <= integer_power <= power_range[1]:
-                        result.append(_candidate(left, angle, integer_power, "ANGLE_CROSS"))
+        angle_center, power_center = round(angle), round(power)
+        nearby = []
+        for integer_angle in range(angle_center - 1, angle_center + 2):
+            for integer_power in range(power_center - 3, power_center + 4):
+                if angle_range[0] <= integer_angle <= angle_range[1] and power_range[0] <= integer_power <= power_range[1]:
+                    nearby.append(_candidate(sample, integer_angle, integer_power, "NEIGHBORHOOD"))
+        if nearby:
+            result.append(min(nearby, key=lambda candidate: (
+                candidate.grid_error,
+                abs(candidate.angle - angle_center),
+                abs(candidate.power - power_center),
+                candidate.angle,
+                candidate.power,
+            )))
     return result
 
 
@@ -165,19 +156,49 @@ def group_integer_candidates(candidates, limit=FINAL_INTEGER_CANDIDATE_POOL):
 
 
 def final_sort_key(result):
-    return (float(result.actual_miss_px), -float(result.min_clearance_px),
+    portal_count = int((result.payload or {}).get("portal_count", 0))
+    return (0 if portal_count else 1, float(result.actual_miss_px), -float(result.min_clearance_px),
             -float(result.actual_incidence), float(result.pre_grid_error),
             float(result.source_score_b))
 
 
+def final_reflector_key(result):
+    payload = result.payload or {}
+    obstacle = payload.get("reflection_obstacle") or {}
+    return (
+        obstacle.get("kind"), obstacle.get("index"),
+        payload.get("reflection_side"),
+    )
+
+
+def select_diverse_final_results(results, max_results):
+    ordered = sorted((result for result in results if result.valid), key=final_sort_key)
+    if len(ordered) <= max_results:
+        return ordered
+    selected = []
+    selected_keys = set()
+    for result in ordered:
+        key = final_reflector_key(result)
+        if key in selected_keys:
+            continue
+        selected.append(result)
+        selected_keys.add(key)
+        if len(selected) == max_results:
+            return sorted(selected, key=final_sort_key)
+    selected_ids = {id(result) for result in selected}
+    selected.extend(result for result in ordered if id(result) not in selected_ids)
+    return sorted(selected[:max_results], key=final_sort_key)
+
+
 def replay_top_integer_candidates(groups, replay, *, max_results=FINAL_RESULT_MAX):
     results = [replay(group) for group in groups]
-    valid = sorted((result for result in results if result.valid), key=final_sort_key)
+    all_valid = [result for result in results if result.valid]
+    valid = select_diverse_final_results(all_valid, max_results)
     return valid[:max_results], {
         "integer_candidate_pool_size": len(groups),
         "integer_full_replays": len(groups),
-        "integer_replay_passed": len(valid),
-        "integer_replay_failed": len(results) - len(valid),
+        "integer_replay_passed": len(all_valid),
+        "integer_replay_failed": len(results) - len(all_valid),
         "final_result_count": min(len(valid), max_results),
     }
 
@@ -202,7 +223,7 @@ class FinalResultManager:
         if not self.results:
             return None
         old_index = self.current_final_index
-        self.current_final_index = max(0, min(old_index + int(delta), len(self.results) - 1))
+        self.current_final_index = (old_index + int(delta)) % len(self.results)
         if self.current_final_index != old_index:
             self.activate()
         return self.current()

@@ -10,9 +10,8 @@ import numpy as np
 from .proxy_events import ProxyEvent, validate_proxy_event_sequence
 from .reflection_routes import unfolded_endpoints
 from .solver_config import (
-    LAYER_B_ANGLE_SPAN_WEIGHT, LAYER_B_CIRCLE_COVERAGE_WEIGHT,
+    LAYER_B_ANGLE_SPAN_WEIGHT,
     LAYER_B_CLEARANCE_WEIGHT, LAYER_B_INCIDENCE_WEIGHT,
-    LAYER_B_LINE_COVERAGE_WEIGHT, LAYER_B_PORTAL_DEPTH_WEIGHT,
     LAYER_B_POWER_SPAN_WEIGHT, LAYER_B_ROOT_WEIGHT,
     REFLECTION_LOW_POWER_MARGIN, REFLECTION_MIN_INCIDENCE,
 )
@@ -92,6 +91,7 @@ def evaluate_layer_b(candidates: Iterable[object], source, target, world, accele
     raw: list[dict] = []
     invalid_reasons: dict[str, int] = {}
     soft_invalid_reasons: dict[str, int] = {}
+    trace: list[dict] = []
     sample_totals: dict[int, int] = {}
     sample_count = root_count = 0
 
@@ -112,12 +112,15 @@ def evaluate_layer_b(candidates: Iterable[object], source, target, world, accele
             stabilities = _root_stabilities(solutions) if solutions and all(_has_physical_solution_shape(s) for s in solutions) else [1.0] * len(solutions)
             for branch, (solution, root_stability) in enumerate(zip(solutions, stabilities)):
                 root_count += 1
+                trace_item = {"id": f"B:A{group_id}:q={key}:branch={branch}", "group": group_id,
+                              "parameter": key, "branch": branch, "coarse_id": id(sampled)}
                 validation = None
                 if _has_physical_solution_shape(solution):
                     reason = _hard_invalid_reason(solution, candidate.family, acceleration)
                     hard_reasons = {"B_POWER_RANGE", "B_ANGLE_RANGE", "B_GRAZING"}
                     if reason in hard_reasons:
                         invalid_reasons[reason] = invalid_reasons.get(reason, 0) + 1
+                        trace.append({**trace_item, "status": "FAIL", "decision": "REJECTED", "reason": reason})
                         continue
                     if reason is None:
                         validation = validate_proxy_event_sequence(
@@ -127,6 +130,8 @@ def evaluate_layer_b(candidates: Iterable[object], source, target, world, accele
                         reason = validation.invalid_reason
                     if reason is not None:
                         soft_invalid_reasons[reason] = soft_invalid_reasons.get(reason, 0) + 1
+                trace.append({**trace_item, "status": "PASS", "decision": "RETAINED_FOR_RANKING",
+                              "reason": reason if _has_physical_solution_shape(solution) else None})
                 raw.append({
                     "group_id": group_id,
                     "parameter": key,
@@ -161,13 +166,8 @@ def evaluate_layer_b(candidates: Iterable[object], source, target, world, accele
                 score += LAYER_B_POWER_SPAN_WEIGHT * max(0.0, power_span / 100.0)
                 score += LAYER_B_ANGLE_SPAN_WEIGHT * angle_span
                 score += LAYER_B_ROOT_WEIGHT * (1.0 - min(1.0, item["root_stability"]))
-                coverage_weight = (LAYER_B_CIRCLE_COVERAGE_WEIGHT if item["coarse"].family.kind == "circle"
-                                   else LAYER_B_LINE_COVERAGE_WEIGHT)
-                score += coverage_weight * (1.0 - valid_count / max(1, sample_total))
-                if item["coarse"].route.has_portals and validation is not None:
-                    score += LAYER_B_PORTAL_DEPTH_WEIGHT * (1.0 - min(1.0, validation.planned_portal_depth))
-                if validation is not None:
-                    score += clearance_penalty(validation.min_unplanned_clearance)
+                # Collision order, circle side, portal order, and final clearance
+                # remain validation/replay gates; they are not Layer-B score terms.
             branch_candidates.append(LayerBProxyCandidate(
                 coarse=item["coarse"], solution=solution, branch=item["branch"], score_b=score,
                 root_stability=item["root_stability"],
@@ -195,6 +195,10 @@ def evaluate_layer_b(candidates: Iterable[object], source, target, world, accele
         for key in ordered_keys:
             if buckets[key] and len(selected) < top_k:
                 selected.append(buckets[key].pop(0))
+    selected_keys = {(id(proxy.coarse), proxy.branch) for proxy in selected}
+    for item in trace:
+        if item["status"] == "PASS":
+            item["decision"] = "RETAINED_FOR_C1" if (item["coarse_id"], item["branch"]) in selected_keys else "DROPPED_TOP_K"
     return selected, {
         "layer_b_evaluated": sample_count,
         "layer_b_samples": sample_count,
@@ -202,4 +206,5 @@ def evaluate_layer_b(candidates: Iterable[object], source, target, world, accele
         "layer_b_passed": len(selected),
         "invalid_reasons": invalid_reasons,
         "soft_invalid_reasons": soft_invalid_reasons,
+        "layer_b_trace": trace,
     }

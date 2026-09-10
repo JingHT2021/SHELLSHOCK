@@ -7,12 +7,21 @@ from math import hypot
 from typing import Literal
 
 import numpy as np
+from shellshock_detector.digit_recognizer import recognize_digits
 
 from shellshock_detector.obstacle_geometry import detect_pink_obstacle_geometry
 
 MAX_PORTAL_RADIUS_RELATIVE_ERROR = 0.15
 
 Point = tuple[float, float]
+
+
+@dataclass(frozen=True)
+class PoseKeypoint:
+    x: float
+    y: float
+    visible: int = 0
+    confidence: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -23,6 +32,7 @@ class DetectionBox:
     width: float
     height: float
     confidence: float
+    keypoints: tuple[PoseKeypoint, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,7 @@ class Portal:
     color: Literal["orange", "blue"]
     center: Point
     radius: float
+    number: int | None = None
 
 
 @dataclass(frozen=True)
@@ -82,7 +93,7 @@ def _center(left: float, top: float, width: float, height: float) -> Point:
     return left + width / 2, top + height / 2
 
 
-def _portal_candidates(boxes: list[DetectionBox], image_width: int, image_height: int) -> tuple[list[Portal], list[Portal]]:
+def _portal_candidates(boxes: list[DetectionBox], image_width: int, image_height: int, image: np.ndarray | None = None) -> tuple[list[Portal], list[Portal]]:
     oranges: list[Portal] = []
     blues: list[Portal] = []
     for box in boxes:
@@ -96,12 +107,18 @@ def _portal_candidates(boxes: list[DetectionBox], image_width: int, image_height
         if clipped is None:
             continue
         left, top, width, height = clipped
-        portal = Portal(color, _center(left, top, width, height), (width + height) / 4)
+        number = None
+        if image is not None:
+            crop = image[int(top + height * 0.20):int(top + height * 0.80), int(left + width * 0.20):int(left + width * 0.80)]
+            text = recognize_digits(crop, foreground="bright")
+            if text and len(text) == 1 and text.isdigit():
+                number = int(text)
+        portal = Portal(color, _center(left, top, width, height), (width + height) / 4, number)
         (oranges if color == "orange" else blues).append(portal)
     return oranges, blues
 
 
-def _portal_pairs(oranges: list[Portal], blues: list[Portal]) -> tuple[PortalPair, ...]:
+def _legacy_portal_pairs(oranges: list[Portal], blues: list[Portal]) -> tuple[PortalPair, ...]:
     """Greedily take unique best radius matches after excluding ambiguous ties."""
     candidates: dict[int, list[tuple[float, int]]] = {}
     reverse_candidates: dict[int, list[tuple[float, int]]] = {}
@@ -145,6 +162,28 @@ def _portal_pairs(oranges: list[Portal], blues: list[Portal]) -> tuple[PortalPai
         used_oranges.add(orange_index)
         used_blues.add(blue_index)
     return tuple(pairs)
+
+
+def _portal_pairs(oranges: list[Portal], blues: list[Portal]) -> tuple[PortalPair, ...]:
+    """Pair confidently recognized numbers first, then unknown portals by geometry."""
+    orange_by_number: dict[int, list[int]] = {}
+    blue_by_number: dict[int, list[int]] = {}
+    for index, portal in enumerate(oranges):
+        if portal.number is not None:
+            orange_by_number.setdefault(portal.number, []).append(index)
+    for index, portal in enumerate(blues):
+        if portal.number is not None:
+            blue_by_number.setdefault(portal.number, []).append(index)
+    pairs: list[PortalPair] = []
+    recognized_oranges = {index for indexes in orange_by_number.values() for index in indexes}
+    recognized_blues = {index for indexes in blue_by_number.values() for index in indexes}
+    for number in sorted(set(orange_by_number) & set(blue_by_number)):
+        orange_indexes, blue_indexes = orange_by_number[number], blue_by_number[number]
+        if len(orange_indexes) == 1 and len(blue_indexes) == 1:
+            pairs.append(PortalPair(oranges[orange_indexes[0]], blues[blue_indexes[0]]))
+    unknown_oranges = [portal for index, portal in enumerate(oranges) if index not in recognized_oranges]
+    unknown_blues = [portal for index, portal in enumerate(blues) if index not in recognized_blues]
+    return tuple(pairs) + _legacy_portal_pairs(unknown_oranges, unknown_blues)
 
 
 def build_world(boxes: list[DetectionBox], image_width: int, image_height: int) -> World:
@@ -245,7 +284,27 @@ def _refined_line(box: DetectionBox, image: np.ndarray) -> LineObstacle | None:
 
 
 def build_world_from_image(boxes: list[DetectionBox], image: np.ndarray) -> World:
-    """Build a YOLO-guided world whose reflective obstacles use strict HSV geometry."""
+    world, _ = build_world_from_image_with_diagnostics(boxes, image)
+    return world
+
+
+def _pose_point(box: DetectionBox, index: int) -> Point | None:
+    if index >= len(box.keypoints):
+        return None
+    point = box.keypoints[index]
+    if point.visible <= 0 or not np.isfinite(point.x) or not np.isfinite(point.y):
+        return None
+    return point.x, point.y
+
+
+def _point_error(left: Point | None, right: Point | None) -> float | None:
+    if left is None or right is None:
+        return None
+    return float(hypot(left[0] - right[0], left[1] - right[1]))
+
+
+def build_world_from_image_with_diagnostics(boxes: list[DetectionBox], image: np.ndarray) -> tuple[World, list[dict[str, object]]]:
+    """Build geometry with Pose points preferred and color geometry retained as a baseline."""
     if image is None or image.size == 0:
         raise ValueError("image must not be empty")
 
@@ -254,22 +313,56 @@ def build_world_from_image(boxes: list[DetectionBox], image: np.ndarray) -> Worl
     base = build_world(non_obstacles, image_width, image_height)
     circles: list[CircleObstacle] = []
     lines: list[LineObstacle] = []
+    diagnostics: list[dict[str, object]] = []
     for box in boxes:
         if box.name == "obstacle_circle":
-            circle = _refined_circle(box, image)
-            if circle is not None:
-                circles.append(circle)
+            color_circle = _refined_circle(box, image)
+            center, edge = _pose_point(box, 0), _pose_point(box, 1)
+            pose_circle = CircleObstacle(center, abs(center[0] - edge[0])) if center and edge and abs(center[0] - edge[0]) > 0.5 else None
+            chosen = pose_circle or color_circle
+            if chosen:
+                circles.append(chosen)
+            diagnostics.append({"class": box.name, "source": "pose" if pose_circle else "color" if color_circle else "bbox", "center_error_px": _point_error(center, color_circle.center if color_circle else None), "edge_error_px": _point_error(edge, (color_circle.center[0] - color_circle.radius, color_circle.center[1]) if color_circle else None)})
         elif box.name == "obstacle_line":
-            line = _refined_line(box, image)
-            if line is not None:
-                lines.append(line)
+            color_line = _refined_line(box, image)
+            start, end = _pose_point(box, 0), _pose_point(box, 1)
+            pose_line = LineObstacle(start, end) if start and end else None
+            chosen = pose_line or color_line
+            if chosen:
+                lines.append(chosen)
+            direct = _point_error(start, color_line.start) + _point_error(end, color_line.end) if start and end and color_line else None
+            reverse = _point_error(start, color_line.end) + _point_error(end, color_line.start) if start and end and color_line else None
+            diagnostics.append({"class": box.name, "source": "pose" if pose_line else "color" if color_line else "bbox", "endpoints_error_px": min(direct, reverse) if direct is not None and reverse is not None else None})
 
+    self_position = base.self_position
+    for box in non_obstacles:
+        if box.name == "self":
+            center = _pose_point(box, 0)
+            if center:
+                diagnostics.append({"class": box.name, "source": "pose", "center_error_px": _point_error(center, base.self_position)})
+                self_position = center
+
+    oranges, blues = _portal_candidates(non_obstacles, image_width, image_height, image)
+    for box in non_obstacles:
+        if box.name not in {"portal_orange", "portal_blue"}:
+            continue
+        center, edge = _pose_point(box, 0), _pose_point(box, 1)
+        candidates = oranges if box.name == "portal_orange" else blues
+        if not center or not edge or not candidates:
+            continue
+        baseline = min(candidates, key=lambda item: hypot(item.center[0] - box.center[0], item.center[1] - box.center[1]))
+        replacement = Portal(baseline.color, center, abs(center[0] - edge[0]), baseline.number)
+        candidates[candidates.index(baseline)] = replacement
+        diagnostics.append({"class": box.name, "source": "pose", "center_error_px": _point_error(center, baseline.center), "edge_error_px": _point_error(edge, (baseline.center[0] - baseline.radius, baseline.center[1]))})
+
+    oranges, blues = _portal_candidates(non_obstacles, image_width, image_height, image)
+    pairs = _portal_pairs(oranges, blues)
     return World(
         image_width=base.image_width,
         image_height=base.image_height,
-        self_position=base.self_position,
+        self_position=self_position,
         circles=tuple(circles),
         lines=tuple(lines),
-        portal_pairs=base.portal_pairs,
-        unpaired_portals=base.unpaired_portals,
-    )
+        portal_pairs=pairs,
+        unpaired_portals=len(oranges) + len(blues) - 2 * len(pairs),
+    ), diagnostics

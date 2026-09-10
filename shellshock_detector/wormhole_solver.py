@@ -147,6 +147,11 @@ def _entries(pairs: Iterable[PortalPair]) -> tuple[_Entry, ...]:
     return tuple(entries)
 
 
+def _power_search_start(theoretical_minimum: float, arc_preference: str) -> int:
+    """Leave two integer power points of entry margin for low wormhole shots."""
+    return ceil(theoretical_minimum + 2) if arc_preference == "low" else ceil(theoretical_minimum)
+
+
 def _portal_sequence(world: World, replay: object) -> tuple[str, ...]:
     sequence: list[str] = []
     for event in replay.events:  # type: ignore[attr-defined]
@@ -185,12 +190,14 @@ def solve_wormhole_integer_shot(source: Point, target: Point, world: World, wind
         for planned in product(entries, repeat=hops):
             shift = (sum(item.shift[0] for item in planned), sum(item.shift[1] for item in planned))
             virtual = (target[0] - shift[0], target[1] - shift[1])
-            minimum = ceil(minimum_ballistic_speed(source, virtual, acceleration) / speed_per_power)
+            theoretical_minimum = minimum_ballistic_speed(source, virtual, acceleration) / speed_per_power
+            minimum = ceil(theoretical_minimum)
+            low_start = _power_search_start(theoretical_minimum, "low")
             # The virtual target can be below the source even though a real
             # route must first climb into an upper portal.  Its minimum-power
             # direct solution is therefore not a safe upper bound: search all
             # playable powers, pruning only after a verified lower-power shot.
-            powers = (range(max(1, minimum), min(100, int(best["power"]) if best else 100) + 1)
+            powers = (range(max(1, low_start), min(100, int(best["power"]) if best else 100) + 1)
                       if arc_preference == "low" else range(100, max(1, minimum, int(best['power']) if best else 1) - 1, -1))
             for power in powers:
                 key = (shift[0], shift[1], power)
@@ -217,6 +224,7 @@ def solve_wormhole_integer_shot(source: Point, target: Point, world: World, wind
                                       "events": ['portal']*len(wanted)+['target'], 'miss_distance': replay.miss_distance,
                                       'clearance': replay.clearance, 'flight_time_seconds': replay.time,
                                       'portal_radii': [{'id': e.portal_id, 'visual': e.entry.radius,
+                                                        'number': e.entry.number,
                                                         'trigger': portal_trigger_radius(e.entry),
                                                         'avoid': portal_avoid_radius(e.entry, scale)} for e in planned]})
                 if legal:

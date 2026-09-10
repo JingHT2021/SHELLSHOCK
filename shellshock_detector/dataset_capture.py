@@ -51,6 +51,21 @@ def save_capture_assets(image: np.ndarray, output_dir: Path, stem: str, wind_box
     return counts
 
 
+def save_detected_capture(image: np.ndarray, output_dir: Path, stem: str):
+    counts = save_capture_assets(image, output_dir, stem)
+    try:
+        _, _, wind_box = detect_wind(image)
+        portals = detect_portal_geometry(image)
+        portal_boxes = [
+            (item.center[0] - item.radius, item.center[1] - item.radius,
+             item.radius * 2, item.radius * 2)
+            for item in portals
+        ]
+    except Exception:
+        return counts
+    return save_capture_assets(image, output_dir, stem, wind_box, portal_boxes)
+
+
 def capture_fixed_screen(output_dir: Path, *, width: int | None = None, region=None, now=None, stem: str | None = None):
     if width is None:
         import win32api
@@ -59,14 +74,12 @@ def capture_fixed_screen(output_dir: Path, *, width: int | None = None, region=N
     x, y, capture_width, capture_height = region
     rgb = np.array(ImageGrab.grab(bbox=(x, y, x + capture_width, y + capture_height), all_screens=True))
     image = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-    _, _, wind_box = detect_wind(image)
-    portals = detect_portal_geometry(image)
-    portal_boxes = [(item.center[0] - item.radius, item.center[1] - item.radius, item.radius * 2, item.radius * 2) for item in portals]
     stem = stem or (now() if now else datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
-    return save_capture_assets(image, output_dir, stem, wind_box, portal_boxes)
+    return save_detected_capture(image, output_dir, stem)
 
 
-def save_shot_metadata(metadata_dir: Path, stem: str, *, direction: str, angle_degrees: float, power: float) -> Path:
+def save_shot_metadata(metadata_dir: Path, stem: str, *, direction: str, angle_degrees: float, power: float,
+                       wind_value: float | None = None, wind_direction: str | None = None) -> Path:
     """Save the launch vector used to recover a manually marked muzzle point."""
     sign = 1.0 if direction == "right" else -1.0
     angle = np.deg2rad(float(angle_degrees))
@@ -76,6 +89,10 @@ def save_shot_metadata(metadata_dir: Path, stem: str, *, direction: str, angle_d
         "power": float(power),
         "direction_vector": [float(sign * np.cos(angle)), float(-np.sin(angle))],
     }
+    if wind_value is not None:
+        payload["wind_value"] = float(wind_value)
+    if wind_direction is not None:
+        payload["wind_direction"] = str(wind_direction)
     path = Path(metadata_dir) / f"{stem}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

@@ -5,9 +5,22 @@ import cv2
 import numpy as np
 
 from shellshock_detector.wind import _find_panel_box, _number_from_panel, detect_direction, detect_wind
+from shellshock_detector.digit_recognizer import recognize_digits
 
 
 class WindDetectionTests(unittest.TestCase):
+    def test_digit_model_distinguishes_one_and_seven(self):
+        image = np.zeros((64, 96), dtype=np.uint8)
+        cv2.putText(image, "17", (8, 48), cv2.FONT_HERSHEY_SIMPLEX, 1.5, 255, 3, cv2.LINE_AA)
+
+        self.assertEqual(recognize_digits(image, foreground="bright"), "17")
+
+    def test_digit_model_reads_two_from_a_dark_wind_panel(self):
+        panel = np.full((80, 140), 230, dtype=np.uint8)
+        cv2.putText(panel, "2", (48, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.8, 30, 4, cv2.LINE_AA)
+
+        self.assertEqual(recognize_digits(panel, foreground="dark"), "2")
+
     def test_direction_is_right_when_triangle_points_right(self):
         panel = np.zeros((60, 100, 3), dtype=np.uint8)
         cv2.fillConvexPoly(panel, np.array(((75, 30), (55, 15), (55, 45))), (220, 220, 220))

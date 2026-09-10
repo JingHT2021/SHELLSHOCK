@@ -59,7 +59,7 @@ class BallisticsTests(unittest.TestCase):
         displacement = predicted_horizontal_displacement(
             power=100,
             angle_degrees=83,
-            wind_value=94,
+            wind_value=91.5,
             wind_direction="left",
             firing_direction="right",
             image_width=3840,

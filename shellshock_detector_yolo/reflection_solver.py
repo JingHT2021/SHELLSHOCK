@@ -9,6 +9,7 @@ import numpy as np
 from scipy.optimize import brentq, minimize_scalar
 
 from .ballistics import GRAVITY_AT_REFERENCE, SPEED_PER_POWER_AT_REFERENCE, _scale, _wind_acceleration
+from .muzzle_geometry import muzzle_position
 from .world_geometry import Point, World
 from .reflection_routes import reflection_routes, unfolded_endpoints, route_enters_planned_portals, route_approach_error
 from .solver_config import (
@@ -17,6 +18,8 @@ from .solver_config import (
     MAX_FLIGHT_TIME, N_LINE_SCAN, N_CIRCLE_SCAN, TOP_K_LAYER_A, TOP_K_LAYER_A_RESCUE,
     TOP_K_LAYER_B, TOP_K_LAYER_B_RESCUE, TOP_K_LAYER_C, MAX_FULL_REPLAYS,
     LAYER_C_LINE_WINDOW, LAYER_C_CIRCLE_WINDOW,
+    PORTAL_ROUTE_PRIORITY_BONUS,
+    REFLECTION_FALLBACK_TARGET_ACCEPT_RADIUS_AT_REFERENCE,
 )
 from .reflection_filter import build_coarse_candidates, fair_candidate_prefix, rank_proxy_candidates
 from .reflection_layer_c import (
@@ -24,6 +27,53 @@ from .reflection_layer_c import (
     generate_integer_candidates, group_integer_candidates, replay_top_integer_candidates,
     sample_surface_interval,
 )
+
+
+def _muzzle_source_for_candidate(source: Point, direction: str, angle: int, image_width: int) -> Point:
+    """Return the angle-specific projectile origin for a final integer candidate."""
+    return muzzle_position(source, direction, angle, image_width)
+
+
+def _c1_corrected_branch(source, target, world, acceleration, speed_per_power,
+                         image_width, family, route, contact, normal, branch_index):
+    """Re-solve a sampled contact after placing the barrel at its integer angle."""
+    virtual_source, virtual_target = unfolded_endpoints(source, target, world, route)
+    solutions = fixed_contact_solutions(
+        virtual_source, virtual_target, contact, normal, acceleration, speed_per_power,
+    )
+    if family.kind == 'circle' and family.side != 'BOTH':
+        solutions = [s for s in solutions if (
+            np.dot(np.asarray(s.velocity) + np.asarray(acceleration) * s.t1, normal) > 0
+        ) == (family.side == 'INNER')]
+    branch = solutions[branch_index] if branch_index < len(solutions) else None
+    previous_angle = None
+    for _ in range(2):
+        if branch is None:
+            return None
+        angle = round(branch.angle_degrees)
+        corrected_source = _muzzle_source_for_candidate(
+            source, getattr(branch, 'direction', 'right'), angle, image_width,
+        )
+        corrected_virtual_source, corrected_virtual_target = unfolded_endpoints(
+            corrected_source, target, world, route,
+        )
+        solutions = fixed_contact_solutions(
+            corrected_virtual_source, corrected_virtual_target,
+            contact, normal, acceleration, speed_per_power,
+        )
+        if family.kind == 'circle' and family.side != 'BOTH':
+            solutions = [s for s in solutions if (
+                np.dot(np.asarray(s.velocity) + np.asarray(acceleration) * s.t1, normal) > 0
+            ) == (family.side == 'INNER')]
+        corrected = solutions[branch_index] if branch_index < len(solutions) else None
+        if corrected is None:
+            return None
+        branch = corrected
+        corrected_angle = round(branch.angle_degrees)
+        if corrected_angle == angle or corrected_angle == previous_angle:
+            break
+        previous_angle = corrected_angle
+    return branch
 
 
 @dataclass(frozen=True)
@@ -67,6 +117,13 @@ class ReflectionBundle:
     @property
     def high(self):
         return self.high_solution
+
+
+def reflection_proxy_score(solution, candidate):
+    score = solution.power + 8.0 * (1.0 - solution.incidence)
+    if candidate.route.has_portals:
+        score -= PORTAL_ROUTE_PRIORITY_BONUS
+    return score
 
 
 def positive_polynomial_roots(a, b, c):
@@ -305,7 +362,7 @@ def _legacy_solve_reflection_bundle(source: Point, target: Point, world: World, 
     diagnostics.update(coarse_diagnostics)
     diagnostics['layer_a_invalid_reasons'] = coarse_invalid_reasons
     def proxy_score(solution, candidate):
-        return solution.power + 8.0*(1.0-solution.incidence)
+        return reflection_proxy_score(solution, candidate)
     proxies, proxy_diagnostics = rank_proxy_candidates(fair_candidate_prefix(coarse, TOP_K_LAYER_A), source, target, world, acceleration,
                                                         speed_per_power, fixed_contact_solutions, proxy_score,
                                                         top_k=TOP_K_LAYER_B, image_width=image_width)
@@ -426,7 +483,7 @@ def _legacy_solve_reflection_bundle(source: Point, target: Point, world: World, 
 
 
 def solve_reflection_bundle(source: Point, target: Point, world: World, wind_value: float, wind_direction: str, image_width: int):
-    """Run Layer A/B, then generate and replay at most ten unique integer shots."""
+    """Run Layer A/B/C and retain a full per-item diagnostic trace for every decision."""
     from .reflection_replay import replay_integer_contact, source_matches_circle_side
     from .combined_replay import replay_combined_shot
 
@@ -444,9 +501,10 @@ def solve_reflection_bundle(source: Point, target: Point, world: World, wind_val
     coarse_diag = dict(coarse_diag)
     diagnostics.update({k: v for k, v in coarse_diag.items() if k != 'invalid_reasons'})
     diagnostics['layer_a_invalid_reasons'] = coarse_diag.get('invalid_reasons', {})
+    diagnostics['layer_a_trace'] = coarse_diag.get('layer_a_trace', [])
 
     def proxy_score(solution, candidate):
-        return solution.power + 8.0 * (1.0 - solution.incidence)
+        return reflection_proxy_score(solution, candidate)
 
     layer_b_started = perf_counter()
     proxies, proxy_diag = rank_proxy_candidates(
@@ -466,58 +524,89 @@ def solve_reflection_bundle(source: Point, target: Point, world: World, wind_val
     diagnostics.update({k: v for k, v in proxy_diag.items() if k != 'invalid_reasons'})
     diagnostics['layer_b_invalid_reasons'] = proxy_diag.get('invalid_reasons', {})
     diagnostics['layer_b_soft_invalid_reasons'] = proxy_diag.get('soft_invalid_reasons', {})
+    diagnostics['layer_b_trace'] = proxy_diag.get('layer_b_trace', [])
 
     layer_c1_started = perf_counter()
     continuous = []
+    c1_trace = []
     for proxy in proxies:
         family = proxy.coarse.family
         route = proxy.coarse.route
         route_family = replace(family, side='BOTH') if family.kind == 'circle' and route.before else family
         if family.kind == 'circle' and not route.before and not source_matches_circle_side(source, world, route_family):
+            c1_trace.append({"id": f"C1:proxy={id(proxy)}", "status": "FAIL", "decision": "SKIPPED", "reason": "C1_CIRCLE_SIDE_POLICY"})
             continue
-        virtual_source, virtual_target = unfolded_endpoints(source, target, world, route)
         lower, upper = build_surface_interval(proxy)
         for parameter in sample_surface_interval(lower, upper):
             contact, normal = _surface(world, route_family, parameter)
-            solutions = fixed_contact_solutions(virtual_source, virtual_target, contact, normal,
-                                                acceleration, speed_per_power)
-            if route_family.kind == 'circle' and route_family.side != 'BOTH':
-                solutions = [s for s in solutions if (np.dot(np.asarray(s.velocity) + np.asarray(acceleration) * s.t1, normal) > 0) == (route_family.side == 'INNER')]
-            branch = solutions[proxy.branch] if proxy.branch < len(solutions) else None
+            branch = _c1_corrected_branch(
+                source, target, world, acceleration, speed_per_power, image_width,
+                route_family, route, contact, normal, proxy.branch,
+            )
             diagnostics['layer_c_continuous_solves'] = diagnostics.get('layer_c_continuous_solves', 0) + 1
             diagnostics['layer_c_surface_samples'] = diagnostics.get('layer_c_surface_samples', 0) + 1
             if branch is not None:
+                c1_trace.append({"id": f"C1:proxy={id(proxy)}:q={parameter:.12g}", "status": "PASS", "decision": "CONTINUOUS_SOLUTION",
+                                 "parameter": float(parameter), "branch": proxy.branch, "angle": float(branch.angle_degrees), "power": float(branch.power)})
                 continuous.append(ContinuousSurfaceSolution(
                     source_b=proxy, surface_param=parameter, branch_id=proxy.branch,
                     angle_cont=branch.angle_degrees, power_cont=branch.power,
                     collision_point=tuple(branch.contact), normal=tuple(branch.normal),
                     incidence=branch.incidence, valid_math=True,
                 ))
+            else:
+                c1_trace.append({"id": f"C1:proxy={id(proxy)}:q={parameter:.12g}", "status": "FAIL", "decision": "REJECTED",
+                                 "parameter": float(parameter), "branch": proxy.branch, "reason": "C1_BRANCH_UNAVAILABLE"})
 
     raw = generate_integer_candidates(continuous)
     groups = group_integer_candidates(raw)
     diagnostics['integer_candidates_raw'] = len(raw)
     diagnostics['integer_candidates_unique'] = len({(c.angle, c.power) for c in raw})
+    c1_trace.extend({"id": f"C1:integer=({candidate.angle},{candidate.power}):source={candidate.source_type}",
+                     "status": "PASS", "decision": "GENERATED", "angle": candidate.angle,
+                     "power": candidate.power, "source_type": candidate.source_type}
+                    for candidate in raw)
+    c1_trace.extend({"id": f"C1:group=({group.angle},{group.power})", "status": "PASS",
+                     "decision": "ENTERED_C2_POOL", "angle": group.angle, "power": group.power,
+                     "source_count": len(group.sources)} for group in groups)
+    diagnostics['layer_c1_trace'] = c1_trace
     layer_c1_seconds = perf_counter() - layer_c1_started
 
-    def replay_group(group):
+    def replay_group(group, *, target_accept_radius=None, relaxed=False):
         for candidate in group.sources:
             continuous_source = candidate.source
             proxy = continuous_source.source_b
             family = proxy.coarse.family
             route = proxy.coarse.route
             direction = getattr(proxy.solution, 'direction', 'right')
+            muzzle_source = _muzzle_source_for_candidate(source, direction, group.angle, image_width)
             route_family = replace(family, side='BOTH') if family.kind == 'circle' and route.before else family
+            provenance = {
+                'reflection_obstacle': {'kind': family.kind, 'index': family.index},
+                'reflection_side': family.side,
+                'layer_b_proxy': {
+                    'branch': proxy.branch,
+                    'surface_parameter': float(getattr(proxy.coarse, 'q_seed', 0.0)),
+                    'score_b': float(proxy.score_b),
+                },
+                'route': {'before': list(route.before), 'after': list(route.after)},
+            }
             if route.has_portals:
                 speed = group.power * speed_per_power
                 angle = radians(group.angle)
                 velocity = ((-1 if direction == 'left' else 1) * speed * cos(angle), -speed * sin(angle))
-                shot = replay_combined_shot(source, velocity, acceleration, world, target, image_width,
-                                             route_family, route.before, route.after)
+                shot = replay_combined_shot(muzzle_source, velocity, acceleration, world, target, image_width,
+                                             route_family, route.before, route.after,
+                                             target_accept_radius=target_accept_radius)
             else:
-                shot = replay_integer_contact(source, target, world, acceleration, image_width,
-                                               route_family, group.power, group.angle, direction)
+                shot = replay_integer_contact(muzzle_source, target, world, acceleration, image_width,
+                                               route_family, group.power, group.angle, direction,
+                                               target_accept_radius=target_accept_radius)
             if shot is not None:
+                shot = dict(shot)
+                shot['c2_provenance'] = provenance
+                if relaxed:
+                    shot['relaxed_target_acceptance'] = True
                 return FinalReplayResult(
                     group.angle, group.power, True, None,
                     float(shot.get('miss_distance', float('inf'))),
@@ -528,10 +617,46 @@ def solve_reflection_bundle(source: Point, target: Point, world: World, wind_val
         return FinalReplayResult(group.angle, group.power, False, 'C_INTEGER_REPLAY')
 
     layer_c2_started = perf_counter()
-    final, replay_diag = replay_top_integer_candidates(groups, replay_group)
+    observed_replays = []
+    def traced_replay(group):
+        result = replay_group(group)
+        observed_replays.append((group, result))
+        return result
+    final, replay_diag = replay_top_integer_candidates(groups, traced_replay)
+    final_keys = {(result.angle, result.power) for result in final}
+    diagnostics['layer_c2_trace'] = [
+        {"id": f"C2:integer=({group.angle},{group.power})", "status": "PASS" if result.valid else "FAIL",
+         "decision": ("FINAL" if (result.valid and (group.angle, group.power) in final_keys)
+                      else "DROPPED_FINAL_RESULT_LIMIT" if result.valid else "REJECTED"),
+         "reason": result.invalid_reason,
+         "angle": group.angle, "power": group.power,
+         "c2_provenance": (result.payload or {}).get('c2_provenance')}
+        for group, result in observed_replays
+    ]
+    if not final and groups:
+        relaxed_replay = lambda group: replay_group(
+            group,
+            target_accept_radius=REFLECTION_FALLBACK_TARGET_ACCEPT_RADIUS_AT_REFERENCE,
+            relaxed=True,
+        )
+        final, relaxed_diag = replay_top_integer_candidates(groups, relaxed_replay)
+        replay_diag['integer_full_replays'] += relaxed_diag['integer_full_replays']
+        replay_diag['integer_replay_passed'] += relaxed_diag['integer_replay_passed']
+        replay_diag['integer_replay_failed'] += relaxed_diag['integer_replay_failed']
+        replay_diag.update({
+            'integer_relaxed_replays': relaxed_diag['integer_full_replays'],
+            'integer_relaxed_replay_passed': relaxed_diag['integer_replay_passed'],
+            'integer_relaxed_replay_failed': relaxed_diag['integer_replay_failed'],
+            'relaxed_target_acceptance_used': bool(final),
+            'relaxed_target_accept_radius': REFLECTION_FALLBACK_TARGET_ACCEPT_RADIUS_AT_REFERENCE,
+        })
     layer_c2_seconds = perf_counter() - layer_c2_started
     diagnostics.update(replay_diag)
     diagnostics['final_results'] = [_result_to_shot(result) for result in final]
+    diagnostics['final_trace'] = [{"id": f"FINAL:integer=({result.angle},{result.power})", "status": "PASS", "decision": "FINAL",
+                                   "angle": result.angle, "power": result.power,
+                                   "c2_provenance": (result.payload or {}).get('c2_provenance')}
+                                  for result in final]
     diagnostics['full_replays'] = diagnostics['integer_full_replays']
     diagnostics['total_seconds'] = perf_counter() - started
     diagnostics['timing'] = {

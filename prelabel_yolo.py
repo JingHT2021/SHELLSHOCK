@@ -72,7 +72,7 @@ def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", type=Path, default=Path("train/runs/shellshock_yolo11n_cv65_final_all/weights/best.pt"))
     parser.add_argument("--image-dir", type=Path, default=Path("train/yolo_captures/full"))
-    parser.add_argument("--override-dir", type=Path, default=Path("train/annotation_overrides"))
+    parser.add_argument("--override-dir", type=Path, default=Path("train/yolo_captures/labels"))
     parser.add_argument("--confidence", type=float, default=0.35)
     parser.add_argument("--overwrite", action="store_true")
     return parser

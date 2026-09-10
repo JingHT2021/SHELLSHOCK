@@ -4,8 +4,8 @@ from math import cos, isfinite, radians, sin
 from numbers import Real
 
 
-AIM_DISC_RADIUS_AT_REFERENCE = 325.0
-"""Full-power aim-disc radius at 1920-pixel client width (empirically calibrated)."""
+AIM_DISC_RADIUS_AT_REFERENCE = 332.5
+"""Safe full-power aim-disc radius at 1920-pixel client width."""
 
 AIM_DISC_CENTER_OFFSET_AT_REFERENCE = (2.5, 3.5)
 """Aim-disc center minus green-tank detection center at 1920-pixel client width."""

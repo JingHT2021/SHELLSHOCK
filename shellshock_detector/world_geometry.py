@@ -7,12 +7,21 @@ from math import hypot
 from typing import Literal
 
 import numpy as np
+from shellshock_detector.digit_recognizer import recognize_digits
 
 from shellshock_detector.obstacle_geometry import detect_pink_obstacle_geometry
 
 MAX_PORTAL_RADIUS_RELATIVE_ERROR = 0.15
 
 Point = tuple[float, float]
+
+
+@dataclass(frozen=True)
+class PoseKeypoint:
+    x: float
+    y: float
+    visible: int = 0
+    confidence: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -23,6 +32,7 @@ class DetectionBox:
     width: float
     height: float
     confidence: float
+    keypoints: tuple[PoseKeypoint, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,7 @@ class Portal:
     color: Literal["orange", "blue"]
     center: Point
     radius: float
+    number: int | None = None
 
 
 @dataclass(frozen=True)
@@ -82,7 +93,7 @@ def _center(left: float, top: float, width: float, height: float) -> Point:
     return left + width / 2, top + height / 2
 
 
-def _portal_candidates(boxes: list[DetectionBox], image_width: int, image_height: int) -> tuple[list[Portal], list[Portal]]:
+def _portal_candidates(boxes: list[DetectionBox], image_width: int, image_height: int, image: np.ndarray | None = None) -> tuple[list[Portal], list[Portal]]:
     oranges: list[Portal] = []
     blues: list[Portal] = []
     for box in boxes:
@@ -96,12 +107,18 @@ def _portal_candidates(boxes: list[DetectionBox], image_width: int, image_height
         if clipped is None:
             continue
         left, top, width, height = clipped
-        portal = Portal(color, _center(left, top, width, height), (width + height) / 4)
+        number = None
+        if image is not None:
+            crop = image[int(top + height * 0.20):int(top + height * 0.80), int(left + width * 0.20):int(left + width * 0.80)]
+            text = recognize_digits(crop, foreground="bright")
+            if text and len(text) == 1 and text.isdigit():
+                number = int(text)
+        portal = Portal(color, _center(left, top, width, height), (width + height) / 4, number)
         (oranges if color == "orange" else blues).append(portal)
     return oranges, blues
 
 
-def _portal_pairs(oranges: list[Portal], blues: list[Portal]) -> tuple[PortalPair, ...]:
+def _legacy_portal_pairs(oranges: list[Portal], blues: list[Portal]) -> tuple[PortalPair, ...]:
     """Greedily take unique best radius matches after excluding ambiguous ties."""
     candidates: dict[int, list[tuple[float, int]]] = {}
     reverse_candidates: dict[int, list[tuple[float, int]]] = {}
@@ -145,6 +162,30 @@ def _portal_pairs(oranges: list[Portal], blues: list[Portal]) -> tuple[PortalPai
         used_oranges.add(orange_index)
         used_blues.add(blue_index)
     return tuple(pairs)
+
+
+def _portal_pairs(oranges: list[Portal], blues: list[Portal]) -> tuple[PortalPair, ...]:
+    """Pair confidently recognized numbers first, then unknown portals by geometry."""
+    orange_by_number: dict[int, list[int]] = {}
+    blue_by_number: dict[int, list[int]] = {}
+    for index, portal in enumerate(oranges):
+        if portal.number is not None:
+            orange_by_number.setdefault(portal.number, []).append(index)
+    for index, portal in enumerate(blues):
+        if portal.number is not None:
+            blue_by_number.setdefault(portal.number, []).append(index)
+
+    pairs: list[PortalPair] = []
+    recognized_oranges = {index for indexes in orange_by_number.values() for index in indexes}
+    recognized_blues = {index for indexes in blue_by_number.values() for index in indexes}
+    for number in sorted(set(orange_by_number) & set(blue_by_number)):
+        orange_indexes, blue_indexes = orange_by_number[number], blue_by_number[number]
+        if len(orange_indexes) == 1 and len(blue_indexes) == 1:
+            pairs.append(PortalPair(oranges[orange_indexes[0]], blues[blue_indexes[0]]))
+
+    unknown_oranges = [portal for index, portal in enumerate(oranges) if index not in recognized_oranges]
+    unknown_blues = [portal for index, portal in enumerate(blues) if index not in recognized_blues]
+    return tuple(pairs) + _legacy_portal_pairs(unknown_oranges, unknown_blues)
 
 
 def build_world(boxes: list[DetectionBox], image_width: int, image_height: int) -> World:
@@ -264,12 +305,14 @@ def build_world_from_image(boxes: list[DetectionBox], image: np.ndarray) -> Worl
             if line is not None:
                 lines.append(line)
 
+    oranges, blues = _portal_candidates(non_obstacles, image_width, image_height, image)
+    pairs = _portal_pairs(oranges, blues)
     return World(
         image_width=base.image_width,
         image_height=base.image_height,
         self_position=base.self_position,
         circles=tuple(circles),
         lines=tuple(lines),
-        portal_pairs=base.portal_pairs,
-        unpaired_portals=base.unpaired_portals,
+        portal_pairs=pairs,
+        unpaired_portals=len(oranges) + len(blues) - 2 * len(pairs),
     )

@@ -1,12 +1,15 @@
+import json
 from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image
 
 from shellshock_detector.dataset_capture import (
     capture_region_for_width,
     save_shot_metadata,
     save_capture_assets,
+    capture_fixed_screen,
 )
 
 
@@ -40,4 +43,29 @@ def test_capture_assets_save_full_wind_and_each_portal(tmp_path: Path):
 def test_shot_metadata_saves_launch_direction_vector(tmp_path: Path):
     path = save_shot_metadata(tmp_path, "scene", direction="right", angle_degrees=0, power=50)
     assert path.exists()
-    assert '"direction_vector": [1.0, -0.0]' in path.read_text(encoding="utf-8")
+    assert json.loads(path.read_text(encoding="utf-8"))["direction_vector"] == [1.0, -0.0]
+
+
+def test_shot_metadata_saves_wind_used_by_solver(tmp_path: Path):
+    path = save_shot_metadata(
+        tmp_path, "scene", direction="right", angle_degrees=30, power=50,
+        wind_value=24, wind_direction="left",
+    )
+    text = path.read_text(encoding="utf-8")
+    assert '"wind_value": 24.0' in text
+    assert '"wind_direction": "left"' in text
+
+
+def test_fixed_capture_keeps_full_image_when_crop_detection_fails(tmp_path: Path, monkeypatch):
+    image = Image.fromarray(np.zeros((40, 60, 3), dtype=np.uint8), mode="RGB")
+
+    monkeypatch.setattr("shellshock_detector.dataset_capture.ImageGrab.grab", lambda **_: image)
+    monkeypatch.setattr(
+        "shellshock_detector.dataset_capture.detect_wind",
+        lambda _: (_ for _ in ()).throw(RuntimeError("wind detector failed")),
+    )
+
+    result = capture_fixed_screen(tmp_path, width=60, stem="scene")
+
+    assert result["full"] == 1
+    assert (tmp_path / "full" / "scene.png").exists()

@@ -13,16 +13,17 @@ from shellshock_detector_yolo.desktop import (
     capture_client_area, client_screen_geometry, click_screen_point,
     ensure_game_window_is_active, find_game_window, screen_to_client_point,
 )
-from shellshock_detector.dataset_capture import capture_fixed_screen, save_shot_metadata
+from shellshock_detector.dataset_capture import save_capture_assets, save_shot_metadata
 from shellshock_detector_yolo.global_solver import solve_integer_shot
 from shellshock_detector_yolo.shot_modes import mode_parts, normalize_mode
 from shellshock_detector_yolo.yolo_runtime import YoloDetector
-from shellshock_detector_yolo.world_geometry import build_world_from_image
+from shellshock_detector_yolo.world_geometry import build_world_from_image_with_diagnostics
 from shellshock_detector_yolo.wind import detect_wind
 from shellshock_detector_yolo.reflection_layer_c import FinalResultManager, FinalReplayResult
 
-DEFAULT_WEIGHTS = Path("train/runs/shellshock_yolo11n_cv65_final_all/weights/best.pt")
+DEFAULT_WEIGHTS = Path("train/runs/shellshock_yolo11n_pose_v1/weights/best.pt")
 EXIT_HOTKEY = "delete"
+REFLECTION_LOG_DIR = Path("logs")
 
 
 def select_mode(key: str, current_mode: str = "normal_low") -> str:
@@ -61,6 +62,8 @@ def format_aim_report(mode: str, solution: dict[str, object], wind_value: int | 
             metrics.append(f"{label} {float(solution[field]):.{precision}f}{suffix}")
     if metrics:
         lines.append('  '.join(metrics))
+    if solution.get('relaxed_target_acceptance'):
+        lines.append(f"RELAXED_TARGET radius={float(solution.get('target_accept_radius', 0.0)):.2f} px")
     timing = solution.get('timing')
     if isinstance(timing, dict):
         lines.append(
@@ -94,7 +97,56 @@ def format_solver_diagnostics(diagnostics: dict[str, object], *, line_count: int
         1000 * float(timing.get('layer_c2_seconds', 0.0)),
         1000 * float(timing.get('total_seconds', diagnostics.get('total_seconds', 0.0))),
     )
-    return '\n'.join((
+    replay_text = (
+        f"RELAXED_REPLAY used={bool(diagnostics.get('relaxed_target_acceptance_used'))} "
+        f"radius={diagnostics.get('relaxed_target_accept_radius', 0.0)} px"
+        if diagnostics.get('relaxed_target_acceptance_used') else None
+    )
+    trace_lines = []
+    portal_traces = diagnostics.get("layer_a_route_trace") or ()
+    trace_lines.append(f"PORTAL_A_TRACE total={len(portal_traces)}")
+    for route in portal_traces:
+        if not isinstance(route, dict):
+            continue
+        route_name = ",".join(str(item) for item in route.get("route", ()))
+        detail = route.get("reason") or ("PASS" if route.get("status") == "PASS" else "-")
+        trace_lines.append(f"  route=[{route_name}] {route.get('status', '?')} {detail}")
+        for segment in route.get("segments", ()):
+            if isinstance(segment, dict):
+                segment_detail = segment.get("reason") or segment.get("status") or "-"
+                trace_lines.append(f"    {segment.get('name', '?')} {segment.get('status', '?')} {segment_detail}")
+    for label, key in (("A", "layer_a_trace"), ("B", "layer_b_trace"), ("C1", "layer_c1_trace"),
+                       ("C2", "layer_c2_trace"), ("FINAL", "final_trace")):
+        entries = diagnostics.get(key) or ()
+        trace_lines.append(f"{label}_TRACE total={len(entries)}")
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            detail = entry.get("reason") or entry.get("decision") or "-"
+            trace_lines.append(f"  {entry.get('id', '?')} {entry.get('status', '?')} {detail}")
+            if label == "A":
+                path = entry.get("path_diagnostics") or {}
+                frame = path.get("reflection_frame")
+                if isinstance(frame, dict):
+                    trace_lines.append(
+                        f"    REFLECTION_FRAME origin={frame.get('origin')} tangent={frame.get('tangent')} "
+                        f"normal={frame.get('normal')} local_source={frame.get('local_source')} "
+                        f"local_target={frame.get('local_target')} acceleration={frame.get('local_acceleration')}"
+                    )
+                    trace_lines.append(
+                        f"    DIRECTIONS before={path.get('directions_before_reflection', ())} "
+                        f"after={path.get('directions_after_reflection', ())}"
+                    )
+                    for phase in ("before_segments", "after_segments"):
+                        for segment in path.get(phase, ()):
+                            if isinstance(segment, dict):
+                                trace_lines.append(
+                                    f"    {phase.upper()} {segment.get('name', '?')} "
+                                    f"{segment.get('status', '?')} {segment.get('reason') or '-'} "
+                                    f"from={segment.get('from')} to={segment.get('to')} "
+                                    f"directions={segment.get('directions_after', ())}"
+                                )
+    return '\n'.join(tuple(item for item in (
         f"OBSTACLES lines={line_count} circles={circle_count}",
         "STAGES A_passed={} B_passed={} C_raw={} C_unique={} replays={} failed={}".format(
             diagnostics.get('layer_a_passed', 0), diagnostics.get('layer_b_passed', 0),
@@ -103,8 +155,50 @@ def format_solver_diagnostics(diagnostics: dict[str, object], *, line_count: int
             diagnostics.get('integer_replay_failed', 0),
         ),
         f"REASONS {' '.join(reasons) if reasons else 'none'}",
+        replay_text,
+        *trace_lines,
         time_text,
-    ))
+    ) if item is not None))
+
+
+def format_solver_summary(diagnostics: dict[str, object]) -> str:
+    """Return the short reflection status suitable for the interactive terminal."""
+    a_reasons = diagnostics.get('layer_a_invalid_reasons') or {}
+    b_reasons = diagnostics.get('layer_b_invalid_reasons') or {}
+    b_soft_reasons = diagnostics.get('layer_b_soft_invalid_reasons') or {}
+    reasons = [f"{key}={value}" for key, value in sorted({
+        **a_reasons, **b_reasons, **{f"SOFT_{key}": value for key, value in b_soft_reasons.items()}
+    }.items())]
+    timing = diagnostics.get('timing') if isinstance(diagnostics.get('timing'), dict) else {}
+    lines = [
+        "STAGES A_passed={} B_passed={} C_raw={} C_unique={} replays={} failed={}".format(
+            diagnostics.get('layer_a_passed', 0), diagnostics.get('layer_b_passed', 0),
+            diagnostics.get('integer_candidates_raw', 0), diagnostics.get('integer_candidates_unique', 0),
+            diagnostics.get('integer_full_replays', diagnostics.get('full_replays', 0)),
+            diagnostics.get('integer_replay_failed', 0),
+        ),
+        f"REASONS {' '.join(reasons) if reasons else 'none'}",
+        "TIME {:.1f}ms".format(1000 * float(timing.get('total_seconds', diagnostics.get('total_seconds', 0.0)))),
+    ]
+    if diagnostics.get('relaxed_target_acceptance_used'):
+        lines.append(
+            f"RELAXED_REPLAY used=True radius={diagnostics.get('relaxed_target_accept_radius', 0.0)} px"
+        )
+    return '\n'.join(lines)
+
+
+def write_reflection_diagnostics_log(
+    diagnostics: dict[str, object], *, line_count: int = 0, circle_count: int = 0,
+    log_dir: Path = REFLECTION_LOG_DIR,
+) -> Path:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    path = (log_dir / f"reflection_{stamp}.log").resolve()
+    path.write_text(
+        format_solver_diagnostics(diagnostics, line_count=line_count, circle_count=circle_count) + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def format_normal_diagnostics(diagnostics: dict[str, object]) -> str:
@@ -129,7 +223,7 @@ def main() -> None:
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument("--confidence", type=float, default=0.6)
     parser.add_argument("--capture-dir", type=Path, default=Path("train/yolo_captures"))
-    parser.add_argument("--shot-metadata-dir", type=Path, default=Path("train/shot_metadata"))
+    parser.add_argument("--shot-metadata-dir", type=Path, default=Path("train/yolo_captures/metadata"))
     parser.add_argument("--capture-x", type=int, default=0)
     parser.add_argument("--capture-y", type=int, default=0)
     parser.add_argument("--capture-width", type=int, default=None)
@@ -166,25 +260,17 @@ def main() -> None:
 
     def aim() -> None:
         try:
-            capture_stem = None
-            if capture_mode:
-                capture_stem = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                region = None
-                if args.capture_width is not None or args.capture_height is not None:
-                    if args.capture_width is None or args.capture_height is None:
-                        raise ValueError("--capture-width and --capture-height must be provided together")
-                    region = (args.capture_x, args.capture_y, args.capture_width, args.capture_height)
-                try:
-                    print(f"Capture: {capture_fixed_screen(args.capture_dir, region=region, stem=capture_stem)}", flush=True)
-                except (OSError, RuntimeError, ValueError) as error:
-                    print(f"Capture skipped: {error}", flush=True)
             print(f"Searching {display_mode(mode)} shot...", flush=True)
             hwnd = find_game_window()
             origin, size = client_screen_geometry(hwnd)
             target = screen_to_client_point(win32api.GetCursorPos(), origin, size)
             image = capture_client_area(hwnd)
             detections = detector.detect(image)
-            world = build_world_from_image(detections, image)
+            world, keypoint_errors = build_world_from_image_with_diagnostics(detections, image)
+            for item in keypoint_errors:
+                errors = [value for key, value in item.items() if key.endswith("error_px") and value is not None]
+                if errors:
+                    print(f"KEYPOINT_ERROR class={item['class']} source={item['source']} px={','.join(f'{value:.2f}' for value in errors)}", flush=True)
             orange = sum(box.name == "portal_orange" for box in detections)
             blue = sum(box.name == "portal_blue" for box in detections)
             print(f"World: self={'yes' if world.self_position else 'no'}; obstacles lines={len(world.lines)}, circles={len(world.circles)}; portals orange={orange}, blue={blue}, pairs={len(world.portal_pairs)}, unpaired={world.unpaired_portals}", flush=True)
@@ -201,8 +287,31 @@ def main() -> None:
                     "no-portal-pair": "YOLO did not produce a usable orange/blue portal pair",
                     "no-verified-wormhole-shot": "portals were found, but no collision-free one/two-hop shot was verified",
                 }
-                details = format_solver_diagnostics(solution.get('diagnostics', {}), line_count=len(world.lines), circle_count=len(world.circles))
+                diagnostics = solution.get('diagnostics', {})
+                if mode_parts(mode)[0] == "reflection":
+                    try:
+                        log_path = write_reflection_diagnostics_log(
+                            diagnostics, line_count=len(world.lines), circle_count=len(world.circles),
+                        )
+                        log_status = f"REFLECTION_LOG {log_path}"
+                    except OSError as error:
+                        log_status = f"REFLECTION_LOG_FAILED {error}"
+                    summary = format_solver_summary(diagnostics)
+                    raise RuntimeError(
+                        f"no safe {mode} shot: {messages.get(reason, reason)}\n{summary}\n{log_status}"
+                    )
+                details = format_solver_diagnostics(diagnostics, line_count=len(world.lines), circle_count=len(world.circles))
                 raise RuntimeError(f"no safe {mode} shot: {messages.get(reason, reason)}\n{details}")
+            if mode_parts(mode)[0] == "reflection":
+                try:
+                    reflection_log_path = write_reflection_diagnostics_log(
+                        solution.get('diagnostics', {}), line_count=len(world.lines), circle_count=len(world.circles),
+                    )
+                    # Debug-only terminal dump; keep disabled during normal play.
+                    # print(format_solver_diagnostics(solution.get('diagnostics', {}), line_count=len(world.lines), circle_count=len(world.circles)), flush=True)
+                    print(f"REFLECTION_LOG {reflection_log_path}", flush=True)
+                except OSError as error:
+                    print(f"REFLECTION_LOG_FAILED {error}", flush=True)
             reflection_results = []
             if mode_parts(mode)[0] == "reflection":
                 for item in solution.get("diagnostics", {}).get("final_results", ()):
@@ -233,18 +342,44 @@ def main() -> None:
                     print(f"CLICK_STATUS=FAILED reason={error} MANUAL CONTROL: POWER={result.power} ANGLE={result.angle} (power, angle)=({result.power}, {result.angle})", flush=True)
                     return "FAILED"
 
+            click_status = "FAILED"
             if reflection_results:
                 final_manager = FinalResultManager(reflection_results, click_final)
-                final_manager.activate(0)
+                click_status = final_manager.activate(0) or "FAILED"
             click = disc_click_point(*world.self_position, str(solution["direction"]), float(solution["angle_degrees"]), float(solution["power"]), image.shape[1])
             if not (0 <= click[0] < size[0] and 0 <= click[1] < size[1]):
                 raise RuntimeError("aim disc point is outside game client")
             if not reflection_results:
                 ensure_game_window_is_active(hwnd)
                 click_screen_point((origin[0] + click[0], origin[1] + click[1]))
+                click_status = "SUCCESS"
             print(format_aim_report(mode, solution, value, direction, click), flush=True)
-            if capture_stem:
-                save_shot_metadata(args.shot_metadata_dir, capture_stem, direction=str(solution["direction"]), angle_degrees=float(solution["angle_degrees"]), power=float(solution["power"]))
+            if capture_mode and click_status == "SUCCESS":
+                capture_stem = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                try:
+                    post_click_hwnd = find_game_window()
+                    post_click_image = capture_client_area(post_click_hwnd)
+                    _, _, post_wind_box = detect_wind(post_click_image)
+                    portal_boxes = [
+                        (box.x, box.y, box.width, box.height)
+                        for box in detections
+                        if box.name in {"portal_orange", "portal_blue"}
+                    ]
+                    print(
+                        f"Capture: {save_capture_assets(post_click_image, args.capture_dir, capture_stem, post_wind_box, portal_boxes)}",
+                        flush=True,
+                    )
+                    save_shot_metadata(
+                        args.shot_metadata_dir,
+                        capture_stem,
+                        direction=str(solution["direction"]),
+                        angle_degrees=float(solution["angle_degrees"]),
+                        power=float(solution["power"]),
+                        wind_value=float(value),
+                        wind_direction=str(direction),
+                    )
+                except Exception as error:
+                    print(f"Capture skipped after click: {error}", flush=True)
         except (RuntimeError, ValueError) as error:
             print(f"Aim skipped: {error}")
 

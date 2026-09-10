@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from math import atan2, cos, hypot, pi, sin
 from typing import Callable, Iterable
 
-from .coarse_path_filter import PortalHop, reflection_path_possible
+from .layer_a import PortalHop, reflection_path_possible
 from .reflection_proxy import ProxyCandidate, evaluate_layer_b
 from .reflection_routes import ReflectionRoute, portal_entries
 from .solver_config import (LAYER_A_CIRCLE_REPRESENTATIVE_COUNT,
-                            LAYER_B_CIRCLE_PARAMETER_DELTA, LAYER_B_LINE_PARAMETERS)
+                            LAYER_B_CIRCLE_PARAMETER_DELTA, LAYER_B_LINE_PARAMETERS,
+                            allowed_circle_sides)
 
 
 @dataclass(frozen=True)
@@ -61,30 +62,54 @@ def build_coarse_candidates(source, target, world, families: Iterable[object], r
     """
     candidates: list[CoarsePathCandidate] = []
     reasons: dict[str, int] = {}
-    directions = ((-1.0, -1.0), (1.0, -1.0))
+    trace: list[dict] = []
+    scale = (world.image_width or 1920) / 1920
     for family in families:
+        if family.kind == "circle" and family.side != "BOTH":
+            circle = world.circles[family.index]
+            if family.side not in allowed_circle_sides(source, circle, scale):
+                trace.append({"id": f"A:{family.kind}#{family.index}:{family.side}", "family": f"{family.kind}#{family.index}",
+                              "side": family.side, "status": "FAIL", "decision": "SKIPPED",
+                              "reason": "A_CIRCLE_SIDE_POLICY"})
+                continue
         for route in routes:
-            seeds = (0.5,) if family.kind == "line" else _circle_seeds(world, family, source, target)
+            seeds = (0.0, 0.5, 1.0) if family.kind == "line" else _circle_seeds(world, family, source, target)
             last_reason = "A_SEGMENT_DIRECTION"
             passed_any = False
             for seed in seeds:
                 contact, normal, tangent = _surface(world, family, seed)
                 result = reflection_path_possible(source, contact, target, _hops(world, route.before), _hops(world, route.after),
-                                                  directions, acceleration, tangent, normal)
+                                                  (), acceleration, tangent, normal)
+                item = {"id": f"A:{family.kind}#{family.index}:{family.side}:q={seed:.12g}:before={','.join(route.before)}:after={','.join(route.after)}",
+                        "family": f"{family.kind}#{family.index}", "side": family.side,
+                        "route_before": list(route.before), "route_after": list(route.after),
+                        "parameter": float(seed), "contact": tuple(float(v) for v in contact)}
+                item["path_diagnostics"] = result.diagnostics
                 if result.valid:
                     candidates.append(CoarsePathCandidate(family, route, seed, contact, normal, result.points))
                     passed_any = True
+                    item.update(status="PASS", decision="RETAINED")
+                    trace.append(item)
                     continue
+                item.update(status="FAIL", decision="REJECTED", reason=result.reason)
+                trace.append(item)
                 last_reason = result.reason
             if not passed_any:
                 reasons[last_reason] = reasons.get(last_reason, 0) + 1
-    return candidates, {"layer_a_generated": sum(reasons.values()) + len(candidates), "layer_a_passed": len(candidates), "invalid_reasons": reasons}
+    return candidates, {"layer_a_generated": sum(reasons.values()) + len(candidates), "layer_a_passed": len(candidates),
+                        "invalid_reasons": reasons, "layer_a_trace": trace}
 
 
 def _nearby_parameters(candidate):
     family = candidate.family
     if family.kind == "line":
-        return tuple(q for q in LAYER_B_LINE_PARAMETERS if family.lower <= q <= family.upper)
+        if abs(candidate.q_seed) <= 1e-9:
+            values = (1 / 6,)
+        elif abs(candidate.q_seed - 1.0) <= 1e-9:
+            values = (5 / 6,)
+        else:
+            values = (1 / 3, 0.5, 2 / 3)
+        return tuple(q for q in values if q in LAYER_B_LINE_PARAMETERS and family.lower <= q <= family.upper)
     return tuple(q % (2 * pi) for q in (candidate.q_seed - LAYER_B_CIRCLE_PARAMETER_DELTA, candidate.q_seed,
                                          candidate.q_seed + LAYER_B_CIRCLE_PARAMETER_DELTA))
 

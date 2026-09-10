@@ -9,6 +9,7 @@ import numpy as np
 import pytesseract
 
 from .models import Wind
+from shellshock_detector.digit_recognizer import recognize_digits, recognize_trained_digits
 
 
 def _configure_tesseract() -> None:
@@ -70,6 +71,25 @@ def _number_from_panel(panel: np.ndarray) -> int | None:
     right = min(width, max(box[0] + box[2] for box in digit_boxes) + 2)
     bottom = min(height, max(box[1] + box[3] for box in digit_boxes) + 2)
     number_area = gray[top:bottom, left:right]
+    # The trained recognizer performs its own component filtering.  Passing
+    # the complete HUD panel preserves the cloud background context and avoids
+    # the legacy tight crop trimming anti-aliased digit edges.
+    trained_value, trained_confidence = recognize_trained_digits(panel)
+    if trained_value is not None and trained_confidence >= 0.75:
+        try:
+            value = int(trained_value)
+            if 0 <= value <= 100:
+                return value
+        except ValueError:
+            pass
+    model_value = recognize_digits(number_area, foreground="dark")
+    if model_value is not None:
+        try:
+            value = int(model_value)
+            if 0 <= value <= 100:
+                return value
+        except ValueError:
+            pass
     enlarged = cv2.resize(number_area, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
     try:
         # Anti-aliasing varies with the displayed wind value.  A higher

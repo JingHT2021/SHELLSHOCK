@@ -137,6 +137,23 @@ def test_build_world_from_image_refines_yolo_circle_and_preserves_self_and_porta
     assert world.circles[0].radius == pytest.approx(150, abs=5)
 
 
+def test_build_world_from_image_pairs_portals_by_center_number():
+    image = np.zeros((700, 1100, 3), dtype=np.uint8)
+    portals = [
+        ("portal_orange", 100, 100, "1"), ("portal_orange", 300, 100, "2"), ("portal_orange", 500, 100, "3"),
+        ("portal_blue", 150, 450, "3"), ("portal_blue", 350, 450, "1"), ("portal_blue", 550, 450, "2"),
+    ]
+    boxes = []
+    for name, x, y, digit in portals:
+        boxes.append(DetectionBox(name, x, y, 80, 80, 0.95))
+        cv2.putText(image, digit, (x + 26, y + 57), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3, cv2.LINE_AA)
+
+    world = build_world_from_image(boxes, image)
+
+    assert len(world.portal_pairs) == 3
+    assert {(pair.orange.number, pair.blue.number) for pair in world.portal_pairs} == {(1, 1), (2, 2), (3, 3)}
+
+
 @pytest.mark.parametrize(
     ("start", "end"),
     [((160, 500), (480, 500)), ((300, 620), (300, 300)), ((120, 650), (420, 470))],

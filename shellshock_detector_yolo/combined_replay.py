@@ -23,7 +23,7 @@ def replay_combined_shot(source, velocity, acceleration, world, target, image_wi
                          family, pre_portals=(), post_portals=(), *,
                          max_time=MAX_FLIGHT_TIME, expected_contact=None,
                          expected_time=None, compute_clearance=True,
-                         require_exact_target=False):
+                         require_exact_target=False, target_accept_radius=None):
     """Verify a route using exact roots and only its explicitly requested events.
 
     Portal translation preserves entry offset and velocity. Only the next
@@ -103,7 +103,8 @@ def replay_combined_shot(source, velocity, acceleration, world, target, image_wi
                 tolerance = EQUATION_RESIDUAL_TOL*max(1., scale)
             else:
                 miss, target_time, closest = closest_approach_to_target(point, current, acceleration, target, remaining)
-                tolerance = TARGET_ACCEPT_RADIUS_AT_REFERENCE*scale
+                tolerance = ((TARGET_ACCEPT_RADIUS_AT_REFERENCE if target_accept_radius is None
+                              else target_accept_radius) * scale)
             if miss > tolerance or target_time <= COLLISION_TIME_EPS:
                 return None
             if candidates and candidates[0][0] <= target_time+COLLISION_TIME_EPS:
@@ -122,6 +123,7 @@ def replay_combined_shot(source, velocity, acceleration, world, target, image_wi
                 'portal_count': len(sequence), 'portal_sequence': tuple(sequence),
                 'reflection_count': 1, 'events': events+['target'],
                 'miss_distance': float(miss), 'clearance': float(clearance),
+                'target_accept_radius': float(tolerance),
                 'flight_time_seconds': elapsed+target_time,
                 'closest_target_point': tuple(float(x) for x in closest),
                 'portal_radii': [{'id': portal_id, 'visual': portals[portal_id][0].radius,
