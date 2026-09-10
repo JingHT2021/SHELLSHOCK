@@ -10,6 +10,7 @@ import cv2
 from shellshock_detector.training_data import yolo_label_line
 from shellshock_detector.yolo_dataset import CLASS_NAMES, YoloBox, parse_yolo_label_text
 from shellshock_detector.obstacle_geometry import detect_pink_obstacle_geometry
+from shellshock_detector_yolo.yolo_runtime import YoloDetector
 
 CLASS_KEY_MAP = {str(i): i for i in range(10)}
 CLASS_LABELS = {0:"enemy / 敌人",1:"self_center_keypoint / 新己方中心关键点",2:"self / 己方中心",3:"obstacle_circle / 圆形障碍物",4:"obstacle_line / 线段障碍物",5:"portal_orange / 橙色虫洞",6:"portal_blue / 蓝色虫洞",7:"blackhole / 黑洞",8:"double_damage / 二倍伤害",9:"Triple_damage / 三倍伤害"}
@@ -187,8 +188,14 @@ def move_annotation_bundle(image_path, override_path, geometry_path, metadata_pa
     for source,destination in pairs:
         _move_if_exists(source,destination)
 
-def _draw(image,circles,lines,center,muzzle,square=False):
+def _draw(image,circles,lines,center,muzzle,square=False,pose_detections=()):
     out=image.copy(); colors=[(0,0,255),(0,200,0),(255,0,0),(0,200,255),(255,255,0),(0,140,255),(255,120,0),(180,0,255),(0,255,180),(255,0,180)]
+    for detection in pose_detections:
+        for index, point in enumerate(getattr(detection, 'keypoints', ())):
+            if point.visible <= 0: continue
+            p=(round(point.x),round(point.y)); color=(255,255,255) if index == 0 else (255,120,255)
+            cv2.circle(out,p,7,color,-1); cv2.circle(out,p,9,(0,0,0),1)
+            cv2.putText(out,f'{detection.name}.kp{index}',(p[0]+8,p[1]-8),cv2.FONT_HERSHEY_SIMPLEX,.42,color,1)
     for a in circles:
         c=colors[a.class_id%len(colors)]; p=(round(a.center_x),round(a.center_y))
         display_radius=a.radius*SELF_DISPLAY_SCALE if a.class_id==2 else a.radius
@@ -202,9 +209,10 @@ def _draw(image,circles,lines,center,muzzle,square=False):
         x,y=round(center[0]),round(center[1]); cv2.drawMarker(out,(x,y),(255,0,255),cv2.MARKER_CROSS,22,3); cv2.putText(out,'self_center',(x+10,y-10),cv2.FONT_HERSHEY_SIMPLEX,.5,(255,0,255),2)
     return out
 
-def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata_dir,barrel_length,wind_label_dir,wind_crops_dir,annotation_dir):
+def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata_dir,barrel_length,wind_label_dir,wind_crops_dir,annotation_dir,weights=None,confidence=.35):
     if not images: raise ValueError('no images matched the selected timestamp range')
     index,selected,radius,square=0,0,24.,False
+    pose_detector=YoloDetector(str(weights), confidence) if weights else None
     while 0<=index<len(images):
         path=images[index]; image=cv2.imread(str(path)); h,w=image.shape[:2]; override=Path(override_dir)/f'{path.stem}.txt'; geometry_path=Path(geometry_dir)/f'{path.stem}.json'; metadata_path=Path(metadata_dir)/f'{path.stem}.json'; meta=_metadata(metadata_path); angle=float(meta['angle_degrees']) if meta and meta.get('angle_degrees') is not None else None
         wind_value=float((meta or {}).get('wind_value', 0))
@@ -215,6 +223,12 @@ def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata
         meta['wind_direction']='left' if wind_signed<0 else 'right'
         meta['wind_source']=str(meta.get('wind_source','manual'))
         boxes=_load_boxes(override if override.exists() else Path(raw_dir)/f'{path.stem}.txt',w,h); circles=[]; lines=[]
+        pose_detections=pose_detector.detect(image) if pose_detector else []
+        def pose_for(class_name, box):
+            candidates=[item for item in pose_detections if item.name == class_name]
+            if not candidates: return None
+            cx,cy=box.center_x*w,box.center_y*h
+            return min(candidates,key=lambda item:hypot(item.x+item.width/2-cx,item.y+item.height/2-cy))
         saved_geometry={}
         if geometry_path.exists():
             try:
@@ -237,8 +251,13 @@ def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata
                     chosen=min(unused_saved_lines,key=lambda x:hypot((x.start[0]+x.end[0])/2-cx,(x.start[1]+x.end[1])/2-cy))
                     unused_saved_lines.remove(chosen); lines.append(chosen)
                 else:
-                    candidates=sorted(detected.lines,key=lambda x:hypot((x.start[0]+x.end[0])/2-cx,(x.start[1]+x.end[1])/2-cy))
-                    lines.append(LineAnnotation(4, candidates[0].start,candidates[0].end) if candidates else _line_from_box(b,w,h))
+                    pose=pose_for('obstacle_line',b)
+                    pose_points=getattr(pose,'keypoints',()) if pose else ()
+                    if len(pose_points)>=2 and pose_points[0].visible>0 and pose_points[1].visible>0:
+                        lines.append(LineAnnotation(4,(pose_points[0].x,pose_points[0].y),(pose_points[1].x,pose_points[1].y)))
+                    else:
+                        candidates=sorted(detected.lines,key=lambda x:hypot((x.start[0]+x.end[0])/2-cx,(x.start[1]+x.end[1])/2-cy))
+                        lines.append(LineAnnotation(4, candidates[0].start,candidates[0].end) if candidates else _line_from_box(b,w,h))
             elif b.class_id != 1:
                 box_center=(b.center_x*w,b.center_y*h)
                 box_radius=max(b.width*w,b.height*h)/2
@@ -260,6 +279,9 @@ def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata
                     muzzle=tuple(saved_geometry['self_muzzle'])
             except (OSError, ValueError, TypeError):
                 muzzle=None
+        if center is None:
+            pose=next((item for item in pose_detections if item.name=='self' and item.keypoints and item.keypoints[0].visible>0),None)
+            if pose: center=(pose.keypoints[0].x,pose.keypoints[0].y)
         if center is None and label_center is not None:
             center=label_center
         def image_point(x,y):
@@ -269,7 +291,7 @@ def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata
             return (view_cx+(x-dw/2.)/scale_x, view_cy+(y-dh/2.)/scale_y)
         def redraw():
             nonlocal view_cx,view_cy
-            rendered=_draw(image,circles,lines,center,muzzle,square)
+            rendered=_draw(image,circles,lines,center,muzzle,square,pose_detections)
             crop_w=min(w,max(1,int(w/zoom))); crop_h=min(h,max(1,int(h/zoom)))
             left=int(round(view_cx-crop_w/2)); top=int(round(view_cy-crop_h/2))
             left=max(0,min(w-crop_w,left)); top=max(0,min(h-crop_h,top)); view_cx=left+crop_w/2.; view_cy=top+crop_h/2.
@@ -401,7 +423,7 @@ def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata
             action=key_action(key)
             if action is None: continue
             preview_path=Path(preview_dir)/f'{path.stem}.jpg'
-            _save_state(override,geometry_path,circles,lines,w,h,center,muzzle); _save_metadata_angle(metadata_path,meta,angle); _save_wind_label(wind_label_dir,wind_crops_dir,path.stem,wind_signed,'manual' if meta.get('wind_source')=='manual' else 'detected'); Path(preview_dir).mkdir(parents=True,exist_ok=True); cv2.imwrite(str(preview_path),_draw(image,circles,lines,center,muzzle,square))
+            _save_state(override,geometry_path,circles,lines,w,h,center,muzzle); _save_metadata_angle(metadata_path,meta,angle); _save_wind_label(wind_label_dir,wind_crops_dir,path.stem,wind_signed,'manual' if meta.get('wind_source')=='manual' else 'detected'); Path(preview_dir).mkdir(parents=True,exist_ok=True); cv2.imwrite(str(preview_path),_draw(image,circles,lines,center,muzzle,square,pose_detections))
             if action=='accept':
                 move_annotation_bundle(path,override,geometry_path,metadata_path,preview_path,Path(wind_label_dir)/f'{path.stem}.json',annotation_dir)
                 images.pop(index)
@@ -423,5 +445,5 @@ def main():
         from prelabel_yolo import run as run_yolo_prelabel
         run_yolo_prelabel(a.weights,a.raw_dir,a.override_dir,a.confidence,a.overwrite_yolo_labels)
         images=select_images(a.raw_dir,'','\U0010ffff') if a.all_images else select_images(a.raw_dir,a.start,a.end)
-    run_annotation(images,a.raw_dir,a.override_dir,a.preview_dir,a.geometry_dir,a.metadata_dir,a.barrel_length,a.wind_label_dir,a.wind_crops_dir,a.annotation_dir)
+    run_annotation(images,a.raw_dir,a.override_dir,a.preview_dir,a.geometry_dir,a.metadata_dir,a.barrel_length,a.wind_label_dir,a.wind_crops_dir,a.annotation_dir,a.weights,a.confidence)
 if __name__=='__main__': main()

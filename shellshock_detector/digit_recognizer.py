@@ -1,7 +1,6 @@
 """Small offline digit recognizer for the game's fixed-font HUD glyphs."""
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -9,104 +8,6 @@ import numpy as np
 
 _TRAINED_MODEL = None
 _TRAINED_MODEL_PATH = Path(__file__).resolve().parents[1] / "train" / "runs" / "wind_digit_cnn_v2" / "wind_digit_cnn.pt"
-
-
-_CANVAS = (48, 32)
-
-
-def _normalize(mask: np.ndarray) -> np.ndarray:
-    ys, xs = np.where(mask > 0)
-    if len(xs) == 0:
-        return np.zeros(_CANVAS, dtype=np.uint8)
-    crop = mask[max(0, ys.min() - 1):ys.max() + 2, max(0, xs.min() - 1):xs.max() + 2]
-    scale = min((_CANVAS[0] - 4) / crop.shape[0], (_CANVAS[1] - 4) / crop.shape[1])
-    resized = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
-    canvas = np.zeros(_CANVAS, dtype=np.uint8)
-    top = (_CANVAS[0] - resized.shape[0]) // 2
-    left = (_CANVAS[1] - resized.shape[1]) // 2
-    canvas[top:top + resized.shape[0], left:left + resized.shape[1]] = resized
-    return canvas
-
-
-@lru_cache(maxsize=1)
-def _templates() -> dict[str, tuple[np.ndarray, ...]]:
-    templates: dict[str, list[np.ndarray]] = {str(i): [] for i in range(10)}
-    fonts = (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX, cv2.FONT_HERSHEY_COMPLEX)
-    for digit in range(10):
-        for font in fonts:
-            for scale in (1.2, 1.5, 1.8):
-                for thickness in (2, 3, 4):
-                    canvas = np.zeros((80, 60), dtype=np.uint8)
-                    cv2.putText(canvas, str(digit), (8, 62), font, scale, 255, thickness, cv2.LINE_AA)
-                    _, mask = cv2.threshold(canvas, 80, 255, cv2.THRESH_BINARY)
-                    templates[str(digit)].append(_normalize(mask))
-    return {key: tuple(value) for key, value in templates.items()}
-
-
-def _score(candidate: np.ndarray, template: np.ndarray) -> float:
-    a = candidate > 0
-    b = template > 0
-    intersection = np.count_nonzero(a & b)
-    union = np.count_nonzero(a | b)
-    return intersection / union if union else 0.0
-
-
-def _mask_candidates(gray: np.ndarray, foreground: str) -> tuple[np.ndarray, ...]:
-    thresholds = (100, 130, 160, 190) if foreground == "bright" else (70, 100, 130, 160)
-    masks = []
-    for threshold in thresholds:
-        mode = cv2.THRESH_BINARY if foreground == "bright" else cv2.THRESH_BINARY_INV
-        _, mask = cv2.threshold(gray, threshold, 255, mode)
-        masks.append(mask)
-    return tuple(masks)
-
-
-def _components(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
-    height, width = mask.shape
-    count, _, stats, _ = cv2.connectedComponentsWithStats(mask)
-    result = []
-    for x, y, box_width, box_height, area in stats[1:count]:
-        if box_height < max(8, int(height * 0.28)):
-            continue
-        if box_width > max(40, int(width * 0.7)):
-            continue
-        if area < max(8, int(box_width * box_height * 0.08)):
-            continue
-        result.append((x, y, box_width, box_height))
-    return sorted(result)
-
-
-def _classify(mask: np.ndarray, box: tuple[int, int, int, int]) -> tuple[str, float]:
-    x, y, width, height = box
-    crop = mask[max(0, y - 2):y + height + 2, max(0, x - 2):x + width + 2]
-    candidate = _normalize(crop)
-    scored = [
-        (max(_score(candidate, template) for template in templates), digit)
-        for digit, templates in _templates().items()
-    ]
-    score, digit = max(scored)
-    return digit, score
-
-
-def recognize_digits(image: np.ndarray, *, foreground: str = "bright") -> str | None:
-    """Recognize one or more fixed-font digits from a small grayscale/BGR ROI."""
-    if foreground not in {"bright", "dark"}:
-        raise ValueError("foreground must be 'bright' or 'dark'")
-    if image is None or image.size == 0:
-        return None
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
-    best: tuple[float, str] | None = None
-    for mask in _mask_candidates(gray, foreground):
-        boxes = _components(mask)
-        if not boxes:
-            continue
-        digits = [_classify(mask, box) for box in boxes]
-        score = sum(item[1] for item in digits) / len(digits)
-        value = "".join(item[0] for item in digits)
-        candidate = (score, value)
-        if best is None or candidate[0] > best[0]:
-            best = candidate
-    return best[1] if best is not None and best[0] >= 0.25 else None
 
 
 def _load_trained_model():

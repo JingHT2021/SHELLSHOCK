@@ -7,7 +7,7 @@ from math import hypot
 from typing import Literal
 
 import numpy as np
-from shellshock_detector.digit_recognizer import recognize_digits
+from shellshock_detector.digit_recognizer import recognize_trained_digits
 
 from shellshock_detector.obstacle_geometry import detect_pink_obstacle_geometry
 
@@ -110,8 +110,8 @@ def _portal_candidates(boxes: list[DetectionBox], image_width: int, image_height
         number = None
         if image is not None:
             crop = image[int(top + height * 0.20):int(top + height * 0.80), int(left + width * 0.20):int(left + width * 0.80)]
-            text = recognize_digits(crop, foreground="bright")
-            if text and len(text) == 1 and text.isdigit():
+            text, confidence = recognize_trained_digits(255 - crop)
+            if text and len(text) == 1 and text.isdigit() and confidence >= 0.50:
                 number = int(text)
         portal = Portal(color, _center(left, top, width, height), (width + height) / 4, number)
         (oranges if color == "orange" else blues).append(portal)

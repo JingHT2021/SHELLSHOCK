@@ -47,13 +47,7 @@ train/annotate/previews
 
 脚本读取 `train/yolo_captures/full`，把模型预测写入 `train/yolo_captures/labels`。已有覆盖层默认不会被覆盖，需要重新预测时加 `--overwrite`。
 
-## 生成训练数据
-
-```powershell
-.\.venv\Scripts\python.exe prepare_yolo_dataset.py --annotation-override-dir train/annotate/labels
-```
-
-如需生成 Pose 数据：
+## 生成 Pose 训练数据
 
 ```powershell
 .\.venv\Scripts\python.exe prepare_yolo_pose.py --geometry-dir train/annotate/pose_geometry

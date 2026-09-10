@@ -1,32 +1,12 @@
 from __future__ import annotations
 
-import re
-from pathlib import Path
-from shutil import which
-
 import cv2
 import numpy as np
-import pytesseract
 
 from .models import Wind
-from shellshock_detector.digit_recognizer import recognize_digits, recognize_trained_digits
+from shellshock_detector.digit_recognizer import recognize_trained_digits
 
 TRAINED_DIGIT_CONFIDENCE_THRESHOLD = 0.50
-
-
-def _configure_tesseract() -> None:
-    if which("tesseract"):
-        return
-    for candidate in (
-        Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
-        Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
-    ):
-        if candidate.is_file():
-            pytesseract.pytesseract.tesseract_cmd = str(candidate)
-            return
-
-
-_configure_tesseract()
 
 
 def detect_direction(panel: np.ndarray) -> str | None:
@@ -53,29 +33,8 @@ def detect_direction(panel: np.ndarray) -> str | None:
 
 
 def _number_from_panel(panel: np.ndarray) -> int | None:
-    gray = cv2.cvtColor(panel, cv2.COLOR_BGR2GRAY)
-    dark = (gray < 100).astype(np.uint8)
-    _, _, stats, _ = cv2.connectedComponentsWithStats(dark)
-    height, width = gray.shape
-    digit_boxes = [
-        (x, y, box_width, box_height)
-        for x, y, box_width, box_height, area in stats[1:]
-        if area >= width * height * 0.02
-        and box_height >= height * 0.35
-        and box_width <= width * 0.45
-        and y >= height * 0.15
-        and y + box_height <= height * 0.9
-    ]
-    if not digit_boxes:
-        return None
-    left = max(0, min(box[0] for box in digit_boxes) - 2)
-    top = max(0, min(box[1] for box in digit_boxes) - 2)
-    right = min(width, max(box[0] + box[2] for box in digit_boxes) + 2)
-    bottom = min(height, max(box[1] + box[3] for box in digit_boxes) + 2)
-    number_area = gray[top:bottom, left:right]
-    # The trained recognizer performs its own component filtering.  Passing
-    # the complete HUD panel preserves the cloud background context and avoids
-    # the legacy tight crop trimming anti-aliased digit edges.
+    # The trained recognizer is the sole numeric recognition path.  It performs
+    # its own digit component filtering on the complete HUD panel.
     trained_value, trained_confidence = recognize_trained_digits(panel)
     if trained_value is not None and trained_confidence >= TRAINED_DIGIT_CONFIDENCE_THRESHOLD:
         try:
@@ -84,30 +43,6 @@ def _number_from_panel(panel: np.ndarray) -> int | None:
                 return value
         except ValueError:
             pass
-    model_value = recognize_digits(number_area, foreground="dark")
-    if model_value is not None:
-        try:
-            value = int(model_value)
-            if 0 <= value <= 100:
-                return value
-        except ValueError:
-            pass
-    enlarged = cv2.resize(number_area, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
-    try:
-        # Anti-aliasing varies with the displayed wind value.  A higher
-        # threshold separates adjacent two-digit glyphs (for example "64"),
-        # while lower thresholds preserve thinner digits such as "4".
-        for threshold in (180, 160, 140):
-            _, binary = cv2.threshold(enlarged, threshold, 255, cv2.THRESH_BINARY)
-            text = pytesseract.image_to_string(binary, config="--psm 7 -c tessedit_char_whitelist=0123456789")
-            match = re.search(r"\d{1,3}", text)
-            if not match:
-                continue
-            value = int(match.group())
-            if 0 <= value <= 100:
-                return value
-    except (pytesseract.TesseractNotFoundError, OSError):
-        return None
     return None
 
 
@@ -168,6 +103,6 @@ def detect_wind(bgr: np.ndarray) -> tuple[Wind, str | None, tuple[int, int, int,
     if direction is None:
         errors.append("wind direction not found")
     if value is None:
-        errors.append("wind value not found (install Tesseract for OCR)")
+        errors.append("wind value not found (trained model unavailable or low confidence)")
     confidence = 0.9 if not errors else 0.45 if direction else 0.25
     return Wind(value=value, direction=direction, confidence=confidence), "; ".join(errors) or None, box

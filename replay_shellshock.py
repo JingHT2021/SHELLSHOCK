@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from math import cos, radians, sin
 from pathlib import Path
 
@@ -213,6 +214,14 @@ def render_replay_visual(image, predicted, guide, scene, report, *, show_annotat
         for box in scene.boxes:
             color = (0, 0, 255) if box.name == "enemy" else (0, 200, 0)
             cv2.rectangle(overlay, (round(box.x), round(box.y)), (round(box.x + box.width), round(box.y + box.height)), color, 2)
+            for index, point in enumerate(box.keypoints):
+                if point.visible <= 0:
+                    continue
+                p = (round(point.x), round(point.y))
+                point_color = (255, 255, 255) if index == 0 else (255, 120, 255)
+                cv2.circle(overlay, p, 7, point_color, -1)
+                cv2.circle(overlay, p, 9, (0, 0, 0), 1)
+                cv2.putText(overlay, f"{box.name}.kp{index}", (p[0] + 8, p[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, .42, point_color, 1)
     if report.get("target") is not None:
         target = tuple(round(value) for value in report["target"])
         cv2.drawMarker(overlay, target, (0, 255, 255), cv2.MARKER_CROSS, 28, 2)
@@ -546,7 +555,8 @@ def interactive(image_path, args):
         elif selected is not None and arrow_adjustment(raw) is not None:
             dx, dy = {81: (-1, 0), 82: (0, -1), 83: (1, 0), 84: (0, 1), 2424832: (-1, 0), 2490368: (0, -1), 2555904: (1, 0), 2621440: (0, 1)}[raw]
             item = scene.boxes[selected]
-            scene.boxes[selected] = type(item)(item.name, item.x+dx, item.y+dy, item.width, item.height, item.confidence, "manual")
+            shifted = tuple(replace(point, x=point.x + dx, y=point.y + dy) for point in item.keypoints)
+            scene.boxes[selected] = replace(item, x=item.x + dx, y=item.y + dy, source="manual", keypoints=shifted)
             recalculate()
         elif 48 <= key <= 57 and key != ord("2"):
             from shellshock_detector.yolo_dataset import CLASS_NAMES

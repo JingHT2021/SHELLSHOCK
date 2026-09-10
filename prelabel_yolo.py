@@ -1,4 +1,4 @@
-"""Run the existing detection model to seed annotation overrides for review."""
+"""Run the YOLO Pose model to seed annotation overrides for review."""
 from __future__ import annotations
 
 import argparse
@@ -70,7 +70,7 @@ def run(weights: Path, image_dir: Path, override_dir: Path, confidence: float, o
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--weights", type=Path, default=Path("train/runs/shellshock_yolo11n_cv65_final_all/weights/best.pt"))
+    parser.add_argument("--weights", type=Path, default=Path("train/runs/shellshock_yolo11n_pose_v1/weights/best.pt"))
     parser.add_argument("--image-dir", type=Path, default=Path("train/yolo_captures/full"))
     parser.add_argument("--override-dir", type=Path, default=Path("train/yolo_captures/labels"))
     parser.add_argument("--confidence", type=float, default=0.35)
