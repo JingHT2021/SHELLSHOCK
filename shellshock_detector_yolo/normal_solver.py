@@ -6,6 +6,9 @@ from .portal_replay import replay_portal_shot
 from .solver_config import INTEGER_ANGLE_RADIUS, MISS_TIE_THRESHOLD_AT_REFERENCE
 from .wormhole_solver import solve_ballistic_for_speed
 
+NORMAL_HIGH_POWER_DEVIATION = 6
+NORMAL_HIGH_ANGLE_RADIUS = 3
+
 
 def _select_normal_candidate(candidates, arc_preference):
     """Choose the lowest-power valid shot for low-arc aiming."""
@@ -14,7 +17,7 @@ def _select_normal_candidate(candidates, arc_preference):
             c['power'], c['miss_distance'], -c['clearance'], c['angle_degrees'],
         ))
     return min(candidates, key=lambda c: (
-        -c['angle_degrees'], c['miss_distance'], c['power'], -c['clearance'],
+        c['miss_distance'], -c['angle_degrees'], -c['clearance'], -c['power'],
     ))
 
 
@@ -36,7 +39,9 @@ def solve_normal_integer_shot(source, target, world, wind_value, wind_direction,
         if not arcs:
             return {'status': 'unreachable', 'reason': 'no-verified-shot', 'diagnostics': diagnostics}
         seed = max(arcs, key=lambda a: a['angle_degrees'])
-        powers = (100,)
+        powers = range(100-NORMAL_HIGH_POWER_DEVIATION, 101)
+        diagnostics['theory_angle'] = float(seed['angle_degrees'])
+        diagnostics['theory_power'] = 100.0
     else:
         seed = theory['minimum_power']
         if seed.get('status') != 'reachable' or not seed['within_power_limit']:
@@ -50,16 +55,12 @@ def solve_normal_integer_shot(source, target, world, wind_value, wind_direction,
     candidates = []
     for power in powers:
         centers = [angle_center]
-        if arc_preference == 'low' or (force_power is not None and force_power != 100):
+        if arc_preference == 'low':
             arcs = tuple(arc for arc in solve_ballistic_for_speed(source, target, acceleration, power*SPEED_PER_POWER_AT_REFERENCE*scale)
                          if (arc.velocity[0] >= 0) == (direction == 'right'))
-            if arc_preference == 'high':
-                if not arcs:
-                    continue
-                centers = [round(max(arcs, key=lambda arc: arc.angle_degrees).angle_degrees)]
-            else:
-                centers += [round(arc.angle_degrees) for arc in arcs]
-        angles = sorted({angle for center in centers for angle in range(max(0, center-INTEGER_ANGLE_RADIUS), min(90, center+INTEGER_ANGLE_RADIUS)+1)})
+            centers += [round(arc.angle_degrees) for arc in arcs]
+        angle_radius = NORMAL_HIGH_ANGLE_RADIUS if arc_preference == 'high' else INTEGER_ANGLE_RADIUS
+        angles = sorted({angle for center in centers for angle in range(max(0, center-angle_radius), min(90, center+angle_radius)+1)})
         for angle in angles:
             diagnostics['candidate_count'] += 1
             speed = power * SPEED_PER_POWER_AT_REFERENCE * scale

@@ -1,60 +1,39 @@
-# Normal High Power Search Design
+# Normal High Local Search Design
 
 ## Goal
 
-Change ordinary-mode `normal_high` aiming from a fixed power of 100 to an
-integer power search across 90 through 100, returning the verified shot with
-the smallest replay miss distance.
+Change ordinary-mode `normal_high` from one fixed 100-power shot to a small
+integer neighborhood search that returns the replay-verified shot with the
+smallest miss distance.
 
-## Scope
+## Search Space
 
-- Apply only to the ordinary `normal_high` solver path.
-- Preserve `normal_low`, wormhole, reflection, and explicit `force_power`
-  behavior.
-- Keep angle and power outputs integer-valued because they map directly to
-  game controls.
+Use the high-arc solution calculated at power 100 as the single theoretical
+angle center. Search:
 
-## Candidate Generation
+- power: every integer from 94 through 100 (100 minus a deviation of 6);
+- angle: every integer from the rounded theoretical angle minus 3 degrees
+  through the rounded theoretical angle plus 3 degrees, clamped to 0--90.
 
-For each integer power from 90 through 100, solve the ballistic equation at
-that speed and retain the high-arc branch matching the established horizontal
-direction. Around that branch's rounded theoretical angle, generate the same
-bounded integer-angle neighborhood already used by the normal solver. Replay
-every generated `(power, angle)` candidate against the real world geometry.
-
-If `force_power` is provided, search only that requested power and preserve the
-existing high-arc branch selection behavior.
+Do not recompute a new theoretical angle for each power. Replay all 49
+candidates when the full neighborhood is inside the legal angle range.
 
 ## Selection
 
-Discard candidates rejected by replay. From the remaining candidates, first
-identify the smallest `miss_distance`. Keep the existing miss-tie tolerance so
-small calibration noise does not destabilize the result. Within that reliable
-set, rank `normal_high` candidates by:
+Discard replay-invalid candidates. Rank the rest by smallest `miss_distance`,
+then use higher angle, greater clearance, and higher power as deterministic
+tie-breakers. Preserve explicit `force_power` by restricting the same angle
+neighborhood to the requested power.
 
-1. smallest `miss_distance`;
-2. highest `angle_degrees`;
-3. greatest `clearance`;
-4. highest `power` as a deterministic final tie-breaker.
+## Scope and Diagnostics
 
-This makes accuracy authoritative while retaining a high-arc preference among
-practically equivalent shots.
-
-## Diagnostics and Failure Handling
-
-The existing candidate and verification counters remain authoritative and now
-cover all powers in the 90--100 range. If no high-arc branch or no replay-valid
-candidate exists across the range, return the existing `no-verified-shot`
-unreachable result with diagnostics.
+Only `normal_high` changes. `normal_low`, wormhole, and reflection behavior
+remain unchanged. High-mode diagnostics report the power-100 high-arc theory
+angle and theory power 100, plus the existing candidate and verification
+counters.
 
 ## Tests
 
-Add focused solver tests that use deterministic ballistic branches and replay
-results to prove:
-
-- `normal_high` evaluates every integer power from 90 through 100;
-- the selected result has the smallest verified miss distance rather than
-  merely the highest angle or power;
-- explicit `force_power` continues to restrict the search to one power.
-
-Run the focused tests first, then the full project test suite.
+Tests verify the 94--100 power range, the fixed theoretical-angle neighborhood,
+49 full-range candidates, accuracy-first selection, deterministic tie-breakers,
+and explicit forced-power restriction.
