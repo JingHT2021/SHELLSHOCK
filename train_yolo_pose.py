@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse
 from dataclasses import asdict, dataclass
 import json
@@ -84,9 +86,9 @@ def train(data: Path, project: Path, name: str, config: TrainingConfig, device: 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data", type=Path, default=Path("train/yolo_pose_dataset_v2/dataset.yaml"))
+    parser.add_argument("--data", type=Path, default=(DATA_ROOT / 'yolo_pose_dataset_v2/dataset.yaml'))
     parser.add_argument("--model", default="yolo11n-pose.pt")
-    parser.add_argument("--project", type=Path, default=Path("train/runs"))
+    parser.add_argument("--project", type=Path, default=(DATA_ROOT / 'runs'))
     parser.add_argument("--name", default="shellshock_yolo11n_pose_v1")
     parser.add_argument("--imgsz", type=int, default=960)
     parser.add_argument("--epochs", type=int, default=200)

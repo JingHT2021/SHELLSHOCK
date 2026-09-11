@@ -1,6 +1,8 @@
 """Run the YOLO Pose model to seed annotation overrides for review."""
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse
 from pathlib import Path
 import cv2
@@ -70,9 +72,9 @@ def run(weights: Path, image_dir: Path, override_dir: Path, confidence: float, o
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--weights", type=Path, default=Path("train/runs/shellshock_yolo11n_pose_v1/weights/best.pt"))
-    parser.add_argument("--image-dir", type=Path, default=Path("train/yolo_captures/full"))
-    parser.add_argument("--override-dir", type=Path, default=Path("train/yolo_captures/labels"))
+    parser.add_argument("--weights", type=Path, default=(DATA_ROOT / 'runs/shellshock_yolo11n_pose_v1/weights/best.pt'))
+    parser.add_argument("--image-dir", type=Path, default=(DATA_ROOT / 'yolo_captures/full'))
+    parser.add_argument("--override-dir", type=Path, default=(DATA_ROOT / 'yolo_captures/labels'))
     parser.add_argument("--confidence", type=float, default=0.35)
     parser.add_argument("--overwrite", action="store_true")
     return parser

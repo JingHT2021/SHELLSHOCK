@@ -7,6 +7,8 @@ Wormhole boxes come from the per-image YOLO labels (classes 5 and 6).
 
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse
 import json
 import json
@@ -14,8 +16,8 @@ from pathlib import Path
 
 import cv2
 
-from shellshock_detector.dataset_capture import _crop
-from shellshock_detector.wind import detect_wind
+from shellshock.capture.storage import _crop
+from shellshock.perception.wind import detect_wind
 
 
 PORTAL_CLASS_IDS = {5, 6}
@@ -132,10 +134,10 @@ def extract_one(image_path: Path, labels_dir: Path, output_dir: Path, wind_label
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image-dir", type=Path, default=Path("train/annotate_check/images"))
-    parser.add_argument("--labels-dir", type=Path, default=Path("train/annotate_check/labels"))
-    parser.add_argument("--output-dir", type=Path, default=Path("train/annotate_check"))
-    parser.add_argument("--wind-labels-dir", type=Path, default=Path("train/annotate_check/wind_labels"))
+    parser.add_argument("--image-dir", type=Path, default=(DATA_ROOT / 'annotate_check/images'))
+    parser.add_argument("--labels-dir", type=Path, default=(DATA_ROOT / 'annotate_check/labels'))
+    parser.add_argument("--output-dir", type=Path, default=(DATA_ROOT / 'annotate_check'))
+    parser.add_argument("--wind-labels-dir", type=Path, default=(DATA_ROOT / 'annotate_check/wind_labels'))
     parser.add_argument("--padding", type=int, default=12)
     return parser
 

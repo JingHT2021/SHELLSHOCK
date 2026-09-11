@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse
 import json
 from pathlib import Path
@@ -10,9 +12,9 @@ import shutil
 
 import cv2
 
-from shellshock_detector.obstacle_geometry import LineObstacle, ObstacleGeometry
-from shellshock_detector.pose_dataset import convert_boxes, format_pose_label
-from shellshock_detector.yolo_dataset import parse_yolo_label_text
+from shellshock.perception.color_geometry import LineObstacle, ObstacleGeometry
+from shellshock.datasets.pose import convert_boxes, format_pose_label
+from shellshock.datasets.yolo import parse_yolo_label_text
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 CLASS_NAMES = {
@@ -55,8 +57,8 @@ def _split_stems(stems: list[str], val_fraction: float, seed: int) -> set[str]:
     return {stem for name in group_names[:count] for stem in groups[name]}
 
 
-def prepare(raw_dir: Path, output_dir: Path, geometry_dir: Path = Path("train/annotate_check/pose_geometry"),
-            override_dir: Path = Path("train/annotate_check/labels"), val_fraction: float = 0.2,
+def prepare(raw_dir: Path, output_dir: Path, geometry_dir: Path = (DATA_ROOT / 'annotate_check/pose_geometry'),
+            override_dir: Path = (DATA_ROOT / 'annotate_check/labels'), val_fraction: float = 0.2,
             seed: int = 42, overwrite: bool = False) -> int:
     raw_dir, output_dir, geometry_dir, override_dir = map(Path, (raw_dir, output_dir, geometry_dir, override_dir))
     if output_dir.exists():
@@ -101,10 +103,10 @@ def prepare(raw_dir: Path, output_dir: Path, geometry_dir: Path = Path("train/an
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--raw-dir", type=Path, default=Path("train/annotate_check"))
-    parser.add_argument("--output-dir", type=Path, default=Path("train/yolo_pose_dataset_v2"))
-    parser.add_argument("--geometry-dir", type=Path, default=Path("train/annotate_check/pose_geometry"))
-    parser.add_argument("--override-dir", type=Path, default=Path("train/annotate_check/labels"))
+    parser.add_argument("--raw-dir", type=Path, default=(DATA_ROOT / 'annotate_check'))
+    parser.add_argument("--output-dir", type=Path, default=(DATA_ROOT / 'yolo_pose_dataset_v2'))
+    parser.add_argument("--geometry-dir", type=Path, default=(DATA_ROOT / 'annotate_check/pose_geometry'))
+    parser.add_argument("--override-dir", type=Path, default=(DATA_ROOT / 'annotate_check/labels'))
     parser.add_argument("--val-fraction", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--overwrite", action="store_true")

@@ -1,16 +1,24 @@
 """Interactive multi-class circle/line annotation editor."""
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse, json, shutil
 from dataclasses import dataclass
 from math import cos, hypot, radians, sin
 from pathlib import Path
 import cv2
 
-from shellshock_detector.training_data import yolo_label_line
-from shellshock_detector.yolo_dataset import CLASS_NAMES, YoloBox, parse_yolo_label_text
-from shellshock_detector.obstacle_geometry import detect_pink_obstacle_geometry
-from shellshock_detector_yolo.yolo_runtime import YoloDetector
+from shellshock.datasets.export import yolo_label_line
+from shellshock.datasets.yolo import CLASS_NAMES, YoloBox, parse_yolo_label_text
+from shellshock.perception.color_geometry import detect_pink_obstacle_geometry
+from shellshock.perception.yolo import YoloDetector
+from shellshock.annotations.conversion import scene_from_editor, save_manual_scene
+from shellshock.application.scene import analyze_frame
+from shellshock.application.solver import solve_integer_shot
+from shellshock.planning.policies import select_mode
+from shellshock.rendering.trajectory import sample_solution_trajectory
+from shellshock.rendering.overlay import draw_trajectory
 
 CLASS_KEY_MAP = {str(i): i for i in range(10)}
 CLASS_LABELS = {0:"enemy / 敌人",1:"self_center_keypoint / 新己方中心关键点",2:"self / 己方中心",3:"obstacle_circle / 圆形障碍物",4:"obstacle_line / 线段障碍物",5:"portal_orange / 橙色虫洞",6:"portal_blue / 蓝色虫洞",7:"blackhole / 黑洞",8:"double_damage / 二倍伤害",9:"Triple_damage / 三倍伤害"}
@@ -159,12 +167,9 @@ def _line_from_box(box,w,h):
     return LineAnnotation(4,(cx,cy-height/2),(cx,cy+height/2))
 
 def _save_state(override_path, geometry_path, circles, lines, width, height, center, muzzle):
-    labels=[circle_to_yolo_box(a,width,height) for a in circles if _circle_intersects_image(a,width,height)]+[line_to_yolo_box(a,width,height) for a in lines]
-    if center is not None:
-        labels.append(point_to_yolo_box(1, center, width, height))
-    override_path.parent.mkdir(parents=True,exist_ok=True); override_path.write_text('\n'.join(labels)+ ('\n' if labels else ''),encoding='utf-8')
-    geometry_path.parent.mkdir(parents=True,exist_ok=True)
-    geometry_path.write_text(json.dumps({'circles':[{'class_id':a.class_id,'center':[a.center_x,a.center_y],'radius':a.radius} for a in circles], 'lines':[{'start':list(a.start),'end':list(a.end)} for a in lines], 'self_center':list(center) if center else None},ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    scene=scene_from_editor(circles,lines,width,height,center,muzzle)
+    save_manual_scene(scene,override_path,geometry_path,backup=False)
+
 
 def _move_if_exists(source: Path, destination: Path):
     if not source.exists(): return
@@ -192,6 +197,7 @@ def _draw(image,circles,lines,center,muzzle,square=False,pose_detections=()):
     out=image.copy(); colors=[(0,0,255),(0,200,0),(255,0,0),(0,200,255),(255,255,0),(0,140,255),(255,120,0),(180,0,255),(0,255,180),(255,0,180)]
     for detection in pose_detections:
         for index, point in enumerate(getattr(detection, 'keypoints', ())):
+            if detection.name == 'self' and index == 0: continue
             if point.visible <= 0: continue
             p=(round(point.x),round(point.y)); color=(255,255,255) if index == 0 else (255,120,255)
             cv2.circle(out,p,7,color,-1); cv2.circle(out,p,9,(0,0,0),1)
@@ -284,6 +290,22 @@ def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata
             if pose: center=(pose.keypoints[0].x,pose.keypoints[0].y)
         if center is None and label_center is not None:
             center=label_center
+        solver_points=(); solver_result={}; solver_signature=None; solver_mode="normal_low"
+        def current_signature():
+            return repr((circles,lines,center,wind_signed,solver_mode))
+        def recompute_shot():
+            nonlocal solver_points,solver_result,solver_signature
+            scene=scene_from_editor(circles,lines,w,h,center,muzzle,{**dict(meta or {}),"wind_value":abs(wind_signed),"wind_direction":"left" if wind_signed<0 else "right"})
+            analysis=analyze_frame(image,scene=scene)
+            enemies=[box.center for box in scene.boxes if box.name=="enemy"]
+            if analysis.world.self_position is None or not enemies:
+                solver_result={"status":"unreachable","reason":"mark-self-and-enemy"};solver_points=()
+            else:
+                solver_result=solve_integer_shot(analysis.world.self_position,enemies[0],analysis.world,analysis.wind_value,analysis.wind_direction,w,solver_mode,barrel_extension=barrel_length)
+                solver_points=sample_solution_trajectory(solver_result,solver_result.get("launch_point",center),w,analysis.wind_value,analysis.wind_direction,world=analysis.world)
+            solver_signature=current_signature()
+            print("SOLVER",solver_mode,solver_result.get("power"),solver_result.get("angle_degrees"),solver_result.get("reason",""),flush=True)
+            redraw()
         def image_point(x,y):
             # The rendered crop has width w/zoom and height h/zoom.
             # Therefore display pixels per source pixel grow with zoom.
@@ -292,6 +314,8 @@ def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata
         def redraw():
             nonlocal view_cx,view_cy
             rendered=_draw(image,circles,lines,center,muzzle,square,pose_detections)
+            if solver_signature==current_signature():
+                draw_trajectory(rendered,solver_points)
             crop_w=min(w,max(1,int(w/zoom))); crop_h=min(h,max(1,int(h/zoom)))
             left=int(round(view_cx-crop_w/2)); top=int(round(view_cy-crop_h/2))
             left=max(0,min(w-crop_w,left)); top=max(0,min(h-crop_h,top)); view_cx=left+crop_w/2.; view_cy=top+crop_h/2.
@@ -299,7 +323,7 @@ def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata
             angle_text='N/A' if angle is None else f'{angle:.1f}deg'
             direction_text=str((meta or {}).get('direction','right')).upper()
             wind_text=f'{abs(wind_signed):.0f} {"LEFT" if wind_signed<0 else "RIGHT"}'
-            cv2.putText(view,f'{index+1}/{len(images)} {path.name} | {selected}: {CLASS_LABELS[selected]} | ANGLE={angle_text} {direction_text} | WIND={wind_text} | RADIUS={radius:.1f}px | BARREL={barrel_px:.1f}px | ZOOM={zoom:.2f}x | A/D 1deg Q/E 5deg Z/C wind',(8,25),cv2.FONT_HERSHEY_SIMPLEX,.45,(255,255,255),2); cv2.imshow(window,view)
+            cv2.putText(view,f'{index+1}/{len(images)} {path.name} | {selected}: {CLASS_LABELS[selected]} | ANGLE={angle_text} {direction_text} | WIND={wind_text} | RADIUS={radius:.1f}px | BARREL={barrel_px:.1f}px | ZOOM={zoom:.2f}x | A/D 1deg Q/E 5deg Z/C wind F5 solve T/H/R mode U arc',(8,25),cv2.FONT_HERSHEY_SIMPLEX,.45,(255,255,255),2); cv2.imshow(window,view)
         def adjust_angle(side, amount):
             nonlocal angle,meta
             angle=0. if angle is None else angle
@@ -385,6 +409,12 @@ def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata
         cv2.setMouseCallback(window,mouse); redraw()
         while True:
             key=cv2.waitKeyEx(30)
+            if key==7602176:
+                recompute_shot(); continue
+            if key in (ord("r"),ord("h"),ord("t")):
+                solver_mode=select_mode(chr(key),solver_mode);recompute_shot();continue
+            if key==ord("u"):
+                solver_mode=select_mode("page down" if solver_mode.endswith("high") else "page up",solver_mode);recompute_shot();continue
             if key in (ord('+'),ord('=')):
                 if selected_object and selected_object[0]=='circle':
                     circles,selected_object=_adjust_circle_radius(circles,selected_object,2)
@@ -437,7 +467,7 @@ def run_annotation(images,raw_dir,override_dir,preview_dir,geometry_dir,metadata
 def write_enemy_supplement(supplemental_dir,stem,points,image_width,image_height):
     p=Path(supplemental_dir)/f'{stem}.txt'; p.parent.mkdir(parents=True,exist_ok=True); p.write_text('\n'.join(yolo_label_line(0,x,image_width,image_height) for x in points)+'\n',encoding='utf-8'); return p
 def build_parser():
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument('--raw-dir',type=Path,default=Path('train/yolo_captures/full')); p.add_argument('--override-dir',type=Path,default=Path('train/yolo_captures/labels')); p.add_argument('--geometry-dir',type=Path,default=Path('train/yolo_captures/pose_geometry')); p.add_argument('--metadata-dir',type=Path,default=Path('train/yolo_captures/metadata')); p.add_argument('--wind-label-dir',type=Path,default=Path('train/yolo_captures/wind/labels')); p.add_argument('--wind-crops-dir',type=Path,default=Path('train/yolo_captures/wind')); p.add_argument('--preview-dir',type=Path,default=Path('train/yolo_captures/previews')); p.add_argument('--annotation-dir',type=Path,default=Path('train/annotate')); p.add_argument('--weights',type=Path,default=Path('train/runs/shellshock_yolo11n_pose_v1/weights/best.pt')); p.add_argument('--confidence',type=float,default=.35); p.add_argument('--no-yolo-prelabel',action='store_true'); p.add_argument('--overwrite-yolo-labels',action='store_true'); p.add_argument('--barrel-length',type=float,default=35.); p.add_argument('--start',default=''); p.add_argument('--end',default='\U0010ffff'); p.add_argument('--all-images',action='store_true'); return p
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument('--raw-dir',type=Path,default=(DATA_ROOT / 'yolo_captures/full')); p.add_argument('--override-dir',type=Path,default=(DATA_ROOT / 'yolo_captures/labels')); p.add_argument('--geometry-dir',type=Path,default=(DATA_ROOT / 'yolo_captures/pose_geometry')); p.add_argument('--metadata-dir',type=Path,default=(DATA_ROOT / 'yolo_captures/metadata')); p.add_argument('--wind-label-dir',type=Path,default=(DATA_ROOT / 'yolo_captures/wind/labels')); p.add_argument('--wind-crops-dir',type=Path,default=(DATA_ROOT / 'yolo_captures/wind')); p.add_argument('--preview-dir',type=Path,default=(DATA_ROOT / 'yolo_captures/previews')); p.add_argument('--annotation-dir',type=Path,default=(DATA_ROOT / 'annotate')); p.add_argument('--weights',type=Path,default=(DATA_ROOT / 'runs/shellshock_yolo11n_pose_v1/weights/best.pt')); p.add_argument('--confidence',type=float,default=.35); p.add_argument('--no-yolo-prelabel',action='store_true'); p.add_argument('--overwrite-yolo-labels',action='store_true'); p.add_argument('--barrel-length',type=float,default=35.); p.add_argument('--start',default=''); p.add_argument('--end',default='\U0010ffff'); p.add_argument('--all-images',action='store_true'); return p
 def main():
     a=build_parser().parse_args()
     images=select_images(a.raw_dir,'','\U0010ffff') if a.all_images else select_images(a.raw_dir,a.start,a.end)

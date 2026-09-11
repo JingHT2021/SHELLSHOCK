@@ -1,6 +1,8 @@
 """Offline ShellShock replay, annotation merge, trajectory overlay, and tuning UI."""
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse
 import json
 import sys
@@ -10,19 +12,23 @@ from pathlib import Path
 
 import cv2
 
-from shellshock_detector_yolo.annotation_conversion import (
+from shellshock.annotations.conversion import (
     AnnotationBox, SceneAnnotation, annotations_to_world, annotations_to_world_with_diagnostics, load_manual_scene, merge_annotations,
     save_manual_scene, scene_to_dict, yolo_detections_to_annotations,
 )
-from shellshock_detector_yolo.guide_trajectory import GuideDetection
-from shellshock_detector_yolo.global_solver import solve_integer_shot
-from shellshock_detector_yolo.shot_modes import normalize_mode
-from shellshock_detector_yolo.trajectory_sampling import sample_solution_trajectory
-from shellshock_detector_yolo.yolo_runtime import YoloDetector
+from shellshock.perception.guide import GuideDetection
+from shellshock.application.solver import solve_integer_shot
+from shellshock.application.scene import analyze_frame
+from shellshock.annotations.bundle import annotation_paths
+from shellshock.rendering.overlay import draw_trajectory
+from shellshock.physics.launch import muzzle_position
+from shellshock.planning.policies import normalize_mode
+from shellshock.rendering.trajectory import sample_solution_trajectory
+from shellshock.perception.yolo import YoloDetector
 
 
-DEFAULT_IMAGE = Path("train/annotate/images")
-DEFAULT_WEIGHTS = Path("train/runs/shellshock_yolo11n_pose_v1/weights/best.pt")
+DEFAULT_IMAGE = (DATA_ROOT / 'annotate/images')
+DEFAULT_WEIGHTS = (DATA_ROOT / 'runs/shellshock_yolo11n_pose_v1/weights/best.pt')
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 ARROW_DELTAS = {
     81: ("angle", -1), 2424832: ("angle", -1),
@@ -74,11 +80,9 @@ def derive_self_center(muzzle, direction, angle_degrees, extension):
 
 
 def solution_launch_point(center, solution, image_width, extension=35.0):
-    direction = str(solution.get("direction", "right")).lower()
-    angle = radians(float(solution.get("angle_degrees", 0.0) or 0.0))
-    length = float(extension) * float(image_width) / 2560.0
-    sign = 1.0 if direction == "right" else -1.0
-    return (float(center[0]) + sign * length * cos(angle), float(center[1]) - length * sin(angle))
+    if solution.get('launch_point') is not None:
+        return tuple(solution['launch_point'])
+    return muzzle_position(center,solution['direction'],float(solution['angle_degrees']),image_width,barrel_length=extension)
 
 
 def fit_to_canvas(image_width, image_height, canvas_width, canvas_height):
@@ -87,18 +91,7 @@ def fit_to_canvas(image_width, image_height, canvas_width, canvas_height):
     return scale, ((canvas_width - rendered_width) // 2, (canvas_height - rendered_height) // 2)
 
 
-def select_replay_mode(key, current_mode="normal_low"):
-    key = key.lower()
-    if key == "r":
-        return "reflection_low"
-    if key == "h":
-        return "wormhole_low"
-    if key == "t":
-        return "normal_low"
-    if key in {"page up", "page down"}:
-        family, variant = normalize_mode(current_mode).rsplit("_", 1)
-        return f"{family}_{'high' if key == 'page up' else 'low'}"
-    return normalize_mode(current_mode)
+from shellshock.planning.policies import select_mode as select_replay_mode
 
 
 def guide_from_report(report):
@@ -119,7 +112,7 @@ def manual_preview_solution(direction, angle_degrees, power, mode):
 
 def make_calibration_sample(solution, predicted_points, actual_point):
     actual = (float(actual_point[0]), float(actual_point[1]))
-    points = tuple((float(x), float(y)) for x, y in predicted_points)
+    points = tuple((float(p[0]), float(p[1])) for p in predicted_points if p is not None)
     if points:
         index = min(range(len(points)), key=lambda i: (points[i][0] - actual[0]) ** 2 + (points[i][1] - actual[1]) ** 2)
         predicted = points[index]
@@ -158,6 +151,7 @@ def calibration_hint(samples):
 
 
 def compare_trajectories(predicted, observed):
+    predicted = tuple(p for p in predicted if p is not None)
     if not predicted or not observed:
         return {"matched_point_count": 0, "mean_distance": None, "max_distance": None, "endpoint_distance": None}
     errors = []
@@ -168,19 +162,22 @@ def compare_trajectories(predicted, observed):
 
 def solver_log_lines(solution):
     diagnostics = solution.get("diagnostics", {}) if isinstance(solution, dict) else {}
-    lines = []
-    for key in ("layer_a_invalid_reasons", "layer_b_invalid_reasons", "layer_b_soft_invalid_reasons"):
-        reasons = diagnostics.get(key) or {}
-        if reasons:
-            lines.append(f"{key}: " + " ".join(f"{name}={count}" for name, count in sorted(reasons.items())))
-    for key in ("layer_a_trace", "layer_b_trace", "layer_c1_trace", "layer_c2_trace", "final_trace", "layer_a_route_trace"):
-        entries = diagnostics.get(key) or []
-        if entries:
-            lines.append(f"{key}: {len(entries)} entries")
-            for entry in entries[-8:]:
-                if isinstance(entry, dict):
-                    lines.append(f"  {entry.get('id', entry.get('route', '?'))} {entry.get('status', '')} {entry.get('decision', '')} {entry.get('reason', '')}".strip())
-    return lines
+    keys = ("layer_a_generated", "layer_a_rejected", "layer_b_seed_count",
+            "candidate_count", "verified_count", "budget_exhausted")
+    lines = [" ".join(f"{key}={diagnostics[key]}" for key in keys if key in diagnostics)]
+    for entry in diagnostics.get("route_trace", ())[-8:]:
+        lines.append(f"{entry.get('route', [])} A={entry.get('layer_a', '?')} {entry.get('reason', '')} seeds={entry.get('continuous_seeds', 0)}")
+    for reason, count in sorted(diagnostics.get("rejected_reasons", {}).items()):
+        lines.append(f"{reason}={count}")
+    return [line for line in lines if line]
+
+
+def manual_controls(scene, solution):
+    """Carry the complete solved aim into interactive preview."""
+    scene.metadata["direction"] = solution.get("direction", scene.metadata.get("direction", "right"))
+    angle = solution.get("angle_degrees")
+    power = solution.get("power")
+    return float(45 if angle is None else angle), int(50 if power is None else power)
 
 
 def save_calibration_samples(image_path, output_root, samples):
@@ -208,13 +205,14 @@ def load_calibration_samples(image_path, output_root):
 
 def render_replay_visual(image, predicted, guide, scene, report, *, show_annotations=True, show_guide=False, line_width=1):
     overlay = image.copy()
-    for index in range(len(predicted) - 1):
-        cv2.line(overlay, tuple(round(v) for v in predicted[index]), tuple(round(v) for v in predicted[index + 1]), (0, 0, 255), line_width)
+    draw_trajectory(overlay, predicted, thickness=line_width)
     if show_annotations:
         for box in scene.boxes:
             color = (0, 0, 255) if box.name == "enemy" else (0, 200, 0)
             cv2.rectangle(overlay, (round(box.x), round(box.y)), (round(box.x + box.width), round(box.y + box.height)), color, 2)
             for index, point in enumerate(box.keypoints):
+                if box.name == "self" and index == 0:
+                    continue
                 if point.visible <= 0:
                     continue
                 p = (round(point.x), round(point.y))
@@ -267,7 +265,7 @@ def _paths(stem, root):
 
 def load_replay_scene(image, source, image_path, data_root, detector=None):
     stem = Path(image_path).stem
-    label, geometry, metadata = _paths(stem, data_root)
+    label, geometry, metadata = annotation_paths(image_path, data_root)
     if detector is not None:
         detections = detector.detect(image)
         automatic = yolo_detections_to_annotations(detections, image.shape[1], image.shape[0])
@@ -286,17 +284,18 @@ def _target(scene):
     return max(enemies, key=lambda item: item.confidence).center if enemies else None
 
 
-def replay_image(image_path, *, source="hybrid", weights=None, mode="normal_low", root=Path("train"), output_root=Path("train/annotate/replay"), target=None, scene_override=None, barrel_extension=35.0, angle_override=None, power_override=None, wind_override=None):
+def replay_image(image_path, *, source="hybrid", weights=None, mode="normal_low", root=DATA_ROOT, output_root=(DATA_ROOT / 'annotate/replay'), target=None, scene_override=None, barrel_extension=35.0, angle_override=None, power_override=None, wind_override=None):
     image = cv2.imread(str(image_path))
     if image is None:
         raise ValueError(f"cannot read image: {image_path}")
-    detector = YoloDetector(str(weights)) if source in {"yolo", "hybrid"} and scene_override is None else None
+    detector = YoloDetector(str(weights or DEFAULT_WEIGHTS)) if source in {"yolo", "hybrid"} and scene_override is None else None
     if scene_override is None:
         scene, paths = load_replay_scene(image, source, image_path, root, detector)
     else:
         scene = scene_override
-        paths = _paths(Path(image_path).stem, root)
-    world, muzzle, keypoint_errors = annotations_to_world_with_diagnostics(scene, image)
+        paths = annotation_paths(image_path, root)
+    analysis = analyze_frame(image, scene=scene, wind_override=wind_override)
+    world, muzzle, keypoint_errors = analysis.world, analysis.muzzle, analysis.diagnostics
     meta = scene.metadata
     direction = str(meta.get("direction", "right")).lower()
     angle = float(meta.get("angle_degrees", 0.0) or 0.0)
@@ -309,14 +308,14 @@ def replay_image(image_path, *, source="hybrid", weights=None, mode="normal_low"
     elif world.self_position is None or target is None:
         solution = {"status": "unreachable", "reason": "missing_self_or_target"}
     else:
-        wind_value = float(meta.get("wind_value", 0.0) or 0.0) if wind_override is None else float(wind_override)
+        wind_value = float(meta.get("wind_value", 0.0) or 0.0)
         wind_direction = str(meta.get("wind_direction", "right")).lower()
-        solution = solve_integer_shot(world.self_position, target, world, wind_value, wind_direction, image.shape[1], normalize_mode(mode))
+        solution = solve_integer_shot(world.self_position, target, world, wind_value, wind_direction, image.shape[1], normalize_mode(mode), barrel_extension=barrel_extension)
     if world.self_position is not None and solution.get("status") == "reachable":
         source_point = solution_launch_point(world.self_position, solution, image.shape[1], barrel_extension)
     else:
         source_point = world.self_position or (0.0, 0.0)
-    wind_value = float(meta.get("wind_value", 0.0) or 0.0) if wind_override is None else float(wind_override)
+    wind_value = float(meta.get("wind_value", 0.0) or 0.0)
     predicted = sample_solution_trajectory(solution, source_point, image.shape[1], wind_value, str(meta.get("wind_direction", "right")), 120, world=world)
     guide = GuideDetection("disabled", reason="game_guide_detection_disabled")
     event_markers = []
@@ -372,7 +371,7 @@ def interactive(image_path, args):
     visible_calibration_samples = list(calibration_samples)
     angle_override = None
     power_override = None
-    wind_value_control = float(report.get("wind_value", 0.0) or 0.0)
+    wind_value_control = float(report.get("wind_value", 0.0) or 0.0) * (-1 if report.get("wind_direction") == "left" else 1)
     applied_wind_value = None
     zoom = 1.0
     view_origin = [0.0, 0.0]
@@ -460,7 +459,7 @@ def interactive(image_path, args):
         visible_calibration_samples = list(calibration_samples)
         applied_wind_value = None
         report, overlay, scene, paths = replay_image(image_path, source=args.source, weights=args.weights, mode=mode, root=args.root, output_root=args.output_root, target=target, barrel_extension=args.barrel_extension)
-        wind_value_control = float(report.get("wind_value", 0.0) or 0.0)
+        wind_value_control = float(report.get("wind_value", 0.0) or 0.0) * (-1 if report.get("wind_direction") == "left" else 1)
         report["manual_adjust"] = manual_adjust
         report["calibration_samples"] = visible_calibration_samples
         report["calibration_hint"] = calibration_hint(calibration_samples)
@@ -508,8 +507,7 @@ def interactive(image_path, args):
         elif key in (9,):
             manual_adjust = not manual_adjust
             if manual_adjust:
-                angle_override = float(report["solution"].get("angle_degrees", 45.0) or 45.0)
-                power_override = int(report["solution"].get("power", 50) or 50)
+                angle_override, power_override = manual_controls(scene, report["solution"])
             else:
                 angle_override = power_override = None
             recalculate()
@@ -536,6 +534,8 @@ def interactive(image_path, args):
             else:
                 power_override = max(1, min(100, power_override + delta))
             recalculate()
+        elif raw == 7602176:
+            recalculate()
         elif key in (ord("r"), ord("R"), ord("h"), ord("H"), ord("t"), ord("T")):
             mode = select_replay_mode(chr(key).lower(), mode)
             recalculate()
@@ -559,7 +559,7 @@ def interactive(image_path, args):
             scene.boxes[selected] = replace(item, x=item.x + dx, y=item.y + dy, source="manual", keypoints=shifted)
             recalculate()
         elif 48 <= key <= 57 and key != ord("2"):
-            from shellshock_detector.yolo_dataset import CLASS_NAMES
+            from shellshock.datasets.yolo import CLASS_NAMES
             class_id = key - 48
             name = CLASS_NAMES[class_id]
             scene.boxes.append(AnnotationBox(name, cursor[0] - 15, cursor[1] - 15, 30, 30, 1.0, "manual"))
@@ -573,8 +573,8 @@ def build_parser():
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument("--source", choices=("hybrid", "yolo", "annotation"), default="hybrid")
     parser.add_argument("--mode", default="normal_low")
-    parser.add_argument("--root", type=Path, default=Path("train"))
-    parser.add_argument("--output-root", type=Path, default=Path("train/annotate/replay"))
+    parser.add_argument("--root", type=Path, default=DATA_ROOT)
+    parser.add_argument("--output-root", type=Path, default=(DATA_ROOT / 'annotate/replay'))
     parser.add_argument("--interactive", action="store_true")
     parser.add_argument("--target", nargs=2, type=float, metavar=("X", "Y"))
     parser.add_argument("--barrel-extension", type=float, default=35.0)
@@ -595,7 +595,7 @@ def main():
         interactive(args.image, args)
     else:
         target = tuple(args.target) if args.target else None
-        report, _, _, _ = replay_image(args.image, source=args.source, weights=args.weights, mode=args.mode, root=args.root, output_root=args.output_root, target=target)
+        report, _, _, _ = replay_image(args.image, source=args.source, weights=args.weights, mode=args.mode, root=args.root, output_root=args.output_root, target=target, barrel_extension=args.barrel_extension)
         print(json.dumps(report, ensure_ascii=False, indent=2, default=list))
 
 

@@ -2,13 +2,21 @@
 
 当前项目使用 YOLO 识别己方坦克、敌方坦克、障碍物和虫洞，并结合风力与弹道求解自动瞄准。
 
+## 统一架构版本（2026-09-11）
+
+两个旧包已经合并为 `shellshock/`。实时识别、截图回放与标注重算共用场景转换、A/B/C 求解和事件回放；具体文件见 [逐文件说明](docs/module-guide.md)、[重构说明](docs/refactor-notes.md) 和 [新旧模块映射](docs/module-migration.json)。[原始盘点](docs/architecture-audit-2026-09-10.md) 保留为迁移前历史记录。
+
+此版本位于 `.worktrees/unified-solver`，分支 `codex/unified-solver`。双击 `run.bat` 启动实时入口，`run_replay.bat --interactive` 启动交互回放，`run_label.bat` 启动标注。启动脚本先找本地 `.venv`，再找原工作区 `.venv`，支持附加参数。
+
+模型、截图和人工标注默认复用原工作区的 `train`，不会复制大型数据；可用环境变量 `SHELLSHOCK_DATA_ROOT` 指定另一套数据。默认路径由 `shellshock/config/paths.py` 集中管理，与启动时的当前目录无关。人工保存或采集仍会写入所选数据目录。
+
 ## 启动
 
 ```powershell
 .\.venv\Scripts\python.exe detect_shellshock_yolo.py
 ```
 
-- `E`：触发一次截图、YOLO 识别、弹道计算和瞄准。
+- `E` / `F5`：触发一次截图、YOLO 识别、弹道计算和瞄准。
 - `Caps Lock`：切换截图采集模式。
 - `Delete`：退出脚本。
 
@@ -34,6 +42,8 @@ train/annotate/pose_geometry
 train/annotate/metadata
 train/annotate/previews
 ```
+
+`F5` 按当前人工几何重新计算轨迹；`T/H/R` 选择普通/虫洞/反射模式，`U` 切换高低弧。
 
 数字键 `0–9` 选择类别；新标注中 `1` 只记录 `self` 的中心关键点，不新增检测框，旧的炮管终点数据保持不变；`2` 仍可标注己方检测框，`4` 标注障碍线。左键新增或选中，右键删除，方向键微调位置，`+/-` 调整半径，`PageUp/PageDown` 切换图片，`Esc` 保存退出。
 
@@ -87,7 +97,7 @@ Pose 关键点固定为 2 个槽位：`self` 使用 `kp0` 记录中心点；直�
 .\.venv\Scripts\python.exe replay_shellshock.py --source hybrid
 ```
 
-`--source` 可选 `hybrid`（默认）、`yolo` 或 `annotation`。结果写入 `train/annotate/replay`，包括预测轨迹、游戏白色虚线检测、合并标注和 JSON 误差报告。
+`--source` 可选 `hybrid`（默认）、`yolo` 或 `annotation`。结果写入 `train/annotate/replay`，包括预测轨迹、合并标注和 JSON 求解报告。当前游戏白色虚线提取关闭，报告不代表真实发射误差。
 
 交互调试：
 
@@ -95,9 +105,9 @@ Pose 关键点固定为 2 个槽位：`self` 使用 `kp0` 记录中心点；直�
 .\.venv\Scripts\python.exe replay_shellshock.py --image train/yolo_captures/full/<stem>.png --source hybrid --interactive
 ```
 
-鼠标左键选择标注，右键删除，方向键移动，数字键添加对应类别；`R` 重新计算，`S` 保存到人工标注文件并生成 `.bak` 备份，`Esc`/`Q` 退出。预测轨迹使用蓝色实线，截图中的游戏轨迹使用白色线段，不绘制红色误差线。
+鼠标左键选择标注，右键删除，方向键移动，数字键添加对应类别；`F5` 重新计算，`S` 保存到人工标注文件并生成 `.bak` 备份，`Esc`/`Q` 退出。预测轨迹由统一事件引擎的分段结果绘制，虫洞位移不会画成连接线。`Tab` 切换手动角度/力度预览。
 
-回放窗口会保持原图比例并使用黑边填充，不会拉伸画面；关闭窗口后会直接退出，不会重新弹出。快捷键：`E` 将当前鼠标位置设为目标并立即重算，`R` 反射模式，`H` 虫洞模式，`T` 普通模式，`PageUp/PageDown` 切换高低弧，`V` 显示/隐藏标注，`G` 显示/隐藏游戏虚线，`F` 切换全屏。
+回放窗口会保持原图比例并使用黑边填充，不会拉伸画面；关闭窗口后会直接退出，不会重新弹出。快捷键：`E` 将当前鼠标位置设为目标并立即重算，`R` 反射模式，`H` 虫洞模式，`T` 普通模式，`PageUp/PageDown` 切换高低弧，`V` 显示/隐藏标注，`F` 切换全屏。
 
 ## 当前模型
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 from pathlib import Path
 import numpy as np
 from ultralytics import YOLO
@@ -17,8 +19,8 @@ def iou(a, b):
 
 
 def main():
-    root = Path("train/yolo_pose_dataset_v2")
-    model = YOLO("train/runs/shellshock_yolo11n_pose_v1/weights/best.pt")
+    root = (DATA_ROOT / 'yolo_pose_dataset_v2')
+    model = YOLO(str(DATA_ROOT / "runs/shellshock_yolo11n_pose_v1/weights/best.pt"))
     errors = []
     by_class = {}
     matched = 0

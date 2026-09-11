@@ -1,6 +1,8 @@
 """Train a small PyTorch classifier for the fixed-font wind HUD digits."""
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse
 import csv
 import json
@@ -11,22 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-from torch import nn
+from shellshock.perception.digit_model import WindDigitNet
 from torch.utils.data import DataLoader, Dataset
-
-
-class WindDigitNet(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(1, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(32, 48, 3, padding=1), nn.ReLU(),
-        )
-        self.classifier = nn.Sequential(nn.Flatten(), nn.Linear(48 * 12 * 8, 64), nn.ReLU(), nn.Dropout(0.15), nn.Linear(64, 10))
-
-    def forward(self, x):
-        return self.classifier(self.features(x))
 
 
 class DigitDataset(Dataset):
@@ -140,8 +128,8 @@ def train(manifest: Path, output_dir: Path, seed: int = 42, epochs: int = 80) ->
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=Path("train/annotate_check/wind_model_data/manifest.csv"))
-    parser.add_argument("--output-dir", type=Path, default=Path("train/runs/wind_digit_cnn"))
+    parser.add_argument("--manifest", type=Path, default=(DATA_ROOT / 'annotate_check/wind_model_data/manifest.csv'))
+    parser.add_argument("--output-dir", type=Path, default=(DATA_ROOT / 'runs/wind_digit_cnn'))
     parser.add_argument("--model", choices=["cnn", "both"], default="cnn")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=80)

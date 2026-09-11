@@ -1,6 +1,8 @@
 """Build grouped single-digit samples from wind HUD crops and labels."""
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse
 import csv
 import json
@@ -112,9 +114,9 @@ def build_dataset(labels_dir: Path, crop_dir: Path, output_dir: Path, seed: int 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--labels-dir", type=Path, default=Path("train/annotate_check/wind_labels"))
-    parser.add_argument("--crop-dir", type=Path, default=Path("train/annotate_check/wind"))
-    parser.add_argument("--output-dir", type=Path, default=Path("train/annotate_check/wind_model_data"))
+    parser.add_argument("--labels-dir", type=Path, default=(DATA_ROOT / 'annotate_check/wind_labels'))
+    parser.add_argument("--crop-dir", type=Path, default=(DATA_ROOT / 'annotate_check/wind'))
+    parser.add_argument("--output-dir", type=Path, default=(DATA_ROOT / 'annotate_check/wind_model_data'))
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     print(json.dumps(build_dataset(args.labels_dir, args.crop_dir, args.output_dir, args.seed), indent=2))

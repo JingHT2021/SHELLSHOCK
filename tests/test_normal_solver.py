@@ -1,171 +1,78 @@
-from math import hypot
-from types import SimpleNamespace
+from math import cos, radians, sin
 from unittest.mock import patch
 
-from shellshock_detector_yolo.ballistics import SPEED_PER_POWER_AT_REFERENCE
-from shellshock_detector_yolo.normal_solver import (
-    _select_normal_candidate,
-    solve_normal_integer_shot,
-)
+import pytest
+
+from shellshock.math2d.ballistics import GRAVITY_AT_REFERENCE, SPEED_PER_POWER_AT_REFERENCE
+from shellshock.perception.world import World, RewardZone
+from shellshock.physics.engine import replay_route
+from shellshock.physics.launch import muzzle_position
+from shellshock.planning.normal import _select_normal_candidate, solve_normal_integer_shot
+from shellshock.math2d.shots import solve_ballistic_for_speed
 
 
-def _theory():
-    return {
-        "minimum_power": {
-            "status": "reachable",
-            "within_power_limit": True,
-            "power": 70.0,
-            "angle_degrees": 45.0,
-            "direction": "right",
-        },
-        "power_100": {
-            "solutions": [
-                {"angle_degrees": 30.0, "direction": "right"},
-                {"angle_degrees": 70.0, "direction": "right"},
-            ]
-        },
-    }
+def test_high_solves_each_power_90_through_100_and_its_own_angle_neighborhood():
+    source, target = (100, 700), (850, 700)
+    acceleration = (0, GRAVITY_AT_REFERENCE)
+    with patch('shellshock.planning.normal.solve_ballistic_for_speed', wraps=solve_ballistic_for_speed) as analytic:
+        result = solve_normal_integer_shot(source, target, World(image_width=1920), 0, 'right', 1920, arc_preference='high')
+    assert [round(call.args[3] / SPEED_PER_POWER_AT_REFERENCE) for call in analytic.call_args_list] == list(range(90, 101))
+    candidates = []
+    for power in range(90, 101):
+        arc = max(solve_ballistic_for_speed(source, target, acceleration, power*SPEED_PER_POWER_AT_REFERENCE), key=lambda a: a.angle_degrees)
+        for angle in range(max(0, round(arc.angle_degrees)-3), min(90, round(arc.angle_degrees)+3)+1):
+            speed = power*SPEED_PER_POWER_AT_REFERENCE
+            replay = replay_route(source, (speed*cos(radians(angle)), -speed*sin(radians(angle))), acceleration, World(image_width=1920), target)
+            if replay['valid']:
+                candidates.append((replay['miss_distance'], power, angle))
+    expected = min(candidates)
+    assert result['miss_distance'] == pytest.approx(expected[0])
+    assert (result['power'], result['angle_degrees']) == expected[1:]
+    assert result['launch_point'] == source
+    assert result['segments'][0]['start'] == source
 
 
-def _replay_for_best_power(best_power, replayed_angles=None):
-    def replay(_source, velocity, _acceleration, _world, _target, _width):
-        from math import atan2, degrees
-
-        power = round(hypot(*velocity) / SPEED_PER_POWER_AT_REFERENCE)
-        if replayed_angles is not None:
-            angle = round(degrees(atan2(-velocity[1], abs(velocity[0]))))
-            replayed_angles.setdefault(power, []).append(angle)
-        return SimpleNamespace(
-            valid=True,
-            miss_distance=abs(power - best_power),
-            clearance=20.0,
-            time=1.0,
-            invalid_reason=None,
-        )
-
-    return replay
+@pytest.mark.parametrize('power', [90, 95, 100])
+def test_high_force_power_solves_only_requested_power(power):
+    with patch('shellshock.planning.normal.solve_ballistic_for_speed', wraps=solve_ballistic_for_speed) as analytic:
+        result = solve_normal_integer_shot((100, 700), (850, 700), World(image_width=1920), 0, 'right', 1920, arc_preference='high', force_power=power)
+    assert [round(call.args[3] / SPEED_PER_POWER_AT_REFERENCE) for call in analytic.call_args_list] == [power]
+    assert result['power'] == power
 
 
-def test_normal_high_searches_94_through_100_around_power_100_theory_angle():
-    replayed_angles = {}
-
-    with (
-        patch(
-            "shellshock_detector_yolo.normal_solver.solve_target",
-            return_value=_theory(),
-        ),
-        patch(
-            "shellshock_detector_yolo.normal_solver.solve_ballistic_for_speed",
-        ) as solve_speed,
-        patch(
-            "shellshock_detector_yolo.normal_solver.replay_portal_shot",
-            side_effect=_replay_for_best_power(96, replayed_angles),
-        ),
-    ):
-        result = solve_normal_integer_shot(
-            (0, 0),
-            (100, 0),
-            object(),
-            0,
-            "right",
-            1920,
-            arc_preference="high",
-        )
-
-    solve_speed.assert_not_called()
-    assert list(replayed_angles) == list(range(94, 101))
-    assert all(angles == [67, 68, 69, 70, 71, 72, 73] for angles in replayed_angles.values())
-    assert result["power"] == 96
-    assert result["miss_distance"] == 0
-    assert result["diagnostics"]["candidate_count"] == 49
-    assert result["diagnostics"]["theory_angle"] == 70.0
-    assert result["diagnostics"]["theory_power"] == 100.0
+def test_high_minimum_can_be_power_90():
+    power, angle = 90, 70
+    speed = power*SPEED_PER_POWER_AT_REFERENCE
+    source = (100, 700)
+    flight_time = 2*speed*sin(radians(angle))/GRAVITY_AT_REFERENCE
+    target = (source[0]+speed*cos(radians(angle))*flight_time, source[1])
+    result = solve_normal_integer_shot(source, target, World(image_width=1920), 0, 'right', 1920, arc_preference='high')
+    assert result['power'] == 90
+    assert result['angle_degrees'] == 70
+    assert result['miss_distance'] < 1e-7
 
 
-def test_normal_high_breaks_equal_miss_ties_by_arc_clearance_then_power():
+def test_normal_uses_angle_specific_muzzle_and_returns_rewards_and_segments():
+    center = (100, 700)
+    world = World(image_width=1920, rewards=(RewardZone(center, 100, 2, 'bonus'),))
+    result = solve_normal_integer_shot(center, (850, 700), world, 0, 'right', 1920, arc_preference='high', tank_center=center)
+    assert result['status'] == 'reachable'
+    assert result['launch_point'] == muzzle_position(center, result['direction'], result['angle_degrees'], 1920)
+    assert result['segments'][0]['start'] == result['launch_point']
+    assert result['damage_multiplier'] == 2
+    assert result['reward_ids'] == ['bonus']
+
+
+def test_high_prioritizes_damage_then_minimum_miss():
     candidates = [
-        {"miss_distance": 1.0, "angle_degrees": 70, "clearance": 50, "power": 100},
-        {"miss_distance": 1.0, "angle_degrees": 71, "clearance": 10, "power": 100},
-        {"miss_distance": 1.0, "angle_degrees": 71, "clearance": 20, "power": 90},
-        {"miss_distance": 1.0, "angle_degrees": 71, "clearance": 20, "power": 95},
+        {'miss_distance': 0.0, 'angle_degrees': 70, 'clearance': 50, 'power': 100, 'damage_multiplier': 1},
+        {'miss_distance': 3.0, 'angle_degrees': 71, 'clearance': 10, 'power': 100, 'damage_multiplier': 2},
+        {'miss_distance': 1.0, 'angle_degrees': 71, 'clearance': 20, 'power': 90, 'damage_multiplier': 2},
     ]
-
-    result = _select_normal_candidate(candidates, "high")
-
-    assert result is candidates[3]
+    assert _select_normal_candidate(candidates, 'high') is candidates[2]
 
 
-def test_normal_high_force_power_searches_only_requested_power():
-    replayed_angles = {}
-
-    with (
-        patch(
-            "shellshock_detector_yolo.normal_solver.solve_target",
-            return_value=_theory(),
-        ),
-        patch(
-            "shellshock_detector_yolo.normal_solver.solve_ballistic_for_speed",
-        ) as solve_speed,
-        patch(
-            "shellshock_detector_yolo.normal_solver.replay_portal_shot",
-            side_effect=_replay_for_best_power(95, replayed_angles),
-        ),
-    ):
-        result = solve_normal_integer_shot(
-            (0, 0),
-            (100, 0),
-            object(),
-            0,
-            "right",
-            1920,
-            arc_preference="high",
-            force_power=95,
-        )
-
-    solve_speed.assert_not_called()
-    assert replayed_angles == {95: [67, 68, 69, 70, 71, 72, 73]}
-    assert result["power"] == 95
-
-
-def test_normal_high_force_power_100_preserves_theory_seed_behavior():
-    replayed_angles = []
-
-    def replay(_source, velocity, _acceleration, _world, _target, _width):
-        from math import atan2, degrees
-
-        replayed_angles.append(round(degrees(atan2(-velocity[1], abs(velocity[0])))))
-        return SimpleNamespace(
-            valid=True,
-            miss_distance=0.0,
-            clearance=20.0,
-            time=1.0,
-            invalid_reason=None,
-        )
-
-    with (
-        patch(
-            "shellshock_detector_yolo.normal_solver.solve_target",
-            return_value=_theory(),
-        ),
-        patch(
-            "shellshock_detector_yolo.normal_solver.solve_ballistic_for_speed"
-        ) as solve_speed,
-        patch(
-            "shellshock_detector_yolo.normal_solver.replay_portal_shot",
-            side_effect=replay,
-        ),
-    ):
-        result = solve_normal_integer_shot(
-            (0, 0),
-            (100, 0),
-            object(),
-            0,
-            "right",
-            1920,
-            arc_preference="high",
-            force_power=100,
-        )
-
-    solve_speed.assert_not_called()
-    assert replayed_angles == [67, 68, 69, 70, 71, 72, 73]
-    assert result["power"] == 100
+def test_low_reward_priority_precedes_power_and_miss():
+    candidates = [dict(power=30, miss_distance=0., clearance=10., angle_degrees=40, damage_multiplier=1),
+                  dict(power=32, miss_distance=5., clearance=10., angle_degrees=40, damage_multiplier=2)]
+    assert _select_normal_candidate(candidates, 'low')['damage_multiplier'] == 2

@@ -1,12 +1,14 @@
 """Generate wind and wormhole crops from completed full-frame captures."""
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse
 from pathlib import Path
 
 import cv2
 
-from shellshock_detector.dataset_capture import save_detected_capture
+from shellshock.capture.storage import save_detected_capture
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
@@ -31,7 +33,7 @@ def extract_assets(full_dir: Path, output_dir: Path, start: str = "", end: str =
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--capture-dir", type=Path, default=Path("train/yolo_captures"))
+    parser.add_argument("--capture-dir", type=Path, default=(DATA_ROOT / 'yolo_captures'))
     parser.add_argument("--start", default="")
     parser.add_argument("--end", default="\U0010ffff")
     args = parser.parse_args()

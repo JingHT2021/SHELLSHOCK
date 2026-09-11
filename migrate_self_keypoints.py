@@ -7,6 +7,8 @@ replay_shellshock.py.  It can be run repeatedly; existing values are kept.
 
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse
 import json
 import math
@@ -177,7 +179,7 @@ def build_parser():
         "roots",
         nargs="*",
         type=Path,
-        default=[Path("train/annotate_check"), Path("train/annotate")],
+        default=[(DATA_ROOT / 'annotate_check'), (DATA_ROOT / 'annotate')],
         help="annotation roots to migrate",
     )
     parser.add_argument("--dry-run", action="store_true", help="report changes without writing files")

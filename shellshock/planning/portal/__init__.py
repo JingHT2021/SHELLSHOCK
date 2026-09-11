@@ -1,0 +1,1 @@
+"""ShellShock shared application package."""

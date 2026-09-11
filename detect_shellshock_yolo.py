@@ -1,6 +1,8 @@
 """Independent YOLO aim entrypoint; does not alter detect_shellshock.py."""
 from __future__ import annotations
 
+from shellshock.config.paths import DATA_ROOT
+
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -8,29 +10,28 @@ from datetime import datetime
 import keyboard
 import win32api
 
-from shellshock_detector_yolo.aiming import disc_click_point
-from shellshock_detector_yolo.desktop import (
+from shellshock.interaction.aiming import disc_click_point
+from shellshock.interaction.click_policy import click_client_point
+from shellshock.adapters.windows import (
     capture_client_area, client_screen_geometry, click_screen_point,
     ensure_game_window_is_active, find_game_window, screen_to_client_point,
 )
-from shellshock_detector.dataset_capture import save_capture_assets, save_shot_metadata
-from shellshock_detector_yolo.global_solver import solve_integer_shot
-from shellshock_detector_yolo.shot_modes import mode_parts, normalize_mode
-from shellshock_detector_yolo.yolo_runtime import YoloDetector
-from shellshock_detector_yolo.world_geometry import build_world_from_image_with_diagnostics
-from shellshock_detector_yolo.wind import detect_wind
-from shellshock_detector_yolo.reflection_layer_c import FinalResultManager, FinalReplayResult
+from shellshock.capture.storage import save_capture_assets, save_shot_metadata
+from shellshock.application.solver import solve_integer_shot
+from shellshock.application.scene import analyze_frame
+from shellshock.config.paths import LOG_ROOT
+from shellshock.planning.policies import mode_parts, normalize_mode
+from shellshock.perception.yolo import YoloDetector
+from shellshock.perception.world import build_world_from_image_with_diagnostics
+from shellshock.perception.wind import detect_wind
+from shellshock.interaction.results import FinalResultManager, FinalReplayResult
 
-DEFAULT_WEIGHTS = Path("train/runs/shellshock_yolo11n_pose_v1/weights/best.pt")
+DEFAULT_WEIGHTS = (DATA_ROOT / 'runs/shellshock_yolo11n_pose_v1/weights/best.pt')
 EXIT_HOTKEY = "delete"
-REFLECTION_LOG_DIR = Path("logs")
+REFLECTION_LOG_DIR = LOG_ROOT
 
 
-def select_mode(key: str, current_mode: str = "normal_low") -> str:
-    if key not in {"page up", "page down"}:
-        return normalize_mode(key)
-    family, _ = mode_parts(current_mode)
-    return f"{family}_{'high' if key == 'page up' else 'low'}"
+from shellshock.planning.policies import select_mode as select_mode
 
 
 def display_mode(mode: str) -> str:
@@ -51,7 +52,7 @@ def format_aim_report(mode: str, solution: dict[str, object], wind_value: int | 
         f"REFLECTIONS {reflections:>2} @ {reflection_point}" if reflections else "REFLECTIONS  0"
     )
     lines = [f"MODE {display_mode(mode):<9} WIND {wind}  {controls}",
-             f"PORTALS {portals:>2}  {reflection}  EVENTS {events:<24} CLICK {click}"]
+             f"PORTALS {portals:>2}  {reflection}  EVENTS {events}"]
     metrics = []
     for field, label, precision, suffix in (
         ('miss_distance', 'MISS', 2, ' px'), ('clearance', 'CLEARANCE', 2, ' px'),
@@ -222,8 +223,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="YOLO ShellShock wormhole aim")
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument("--confidence", type=float, default=0.6)
-    parser.add_argument("--capture-dir", type=Path, default=Path("train/yolo_captures"))
-    parser.add_argument("--shot-metadata-dir", type=Path, default=Path("train/yolo_captures/metadata"))
+    parser.add_argument("--capture-dir", type=Path, default=(DATA_ROOT / 'yolo_captures'))
+    parser.add_argument("--shot-metadata-dir", type=Path, default=(DATA_ROOT / 'yolo_captures/metadata'))
     parser.add_argument("--capture-x", type=int, default=0)
     parser.add_argument("--capture-y", type=int, default=0)
     parser.add_argument("--capture-width", type=int, default=None)
@@ -266,7 +267,8 @@ def main() -> None:
             target = screen_to_client_point(win32api.GetCursorPos(), origin, size)
             image = capture_client_area(hwnd)
             detections = detector.detect(image)
-            world, keypoint_errors = build_world_from_image_with_diagnostics(detections, image)
+            analysis = analyze_frame(image, detections=detections)
+            world, keypoint_errors = analysis.world, analysis.diagnostics
             for item in keypoint_errors:
                 errors = [value for key, value in item.items() if key.endswith("error_px") and value is not None]
                 if errors:
@@ -276,8 +278,7 @@ def main() -> None:
             print(f"World: self={'yes' if world.self_position else 'no'}; obstacles lines={len(world.lines)}, circles={len(world.circles)}; portals orange={orange}, blue={blue}, pairs={len(world.portal_pairs)}, unpaired={world.unpaired_portals}", flush=True)
             if world.self_position is None:
                 raise RuntimeError("YOLO did not find one unambiguous self tank")
-            wind, _, _ = detect_wind(image)
-            value, direction = wind.value or 0, wind.direction or "right"
+            value, direction = analysis.wind_value, analysis.wind_direction
             solution = solve_integer_shot(world.self_position, target, world, value, direction, image.shape[1], mode)
             if mode_parts(mode)[0] == "normal" and solution.get('diagnostics'):
                 print(format_normal_diagnostics(solution['diagnostics']), flush=True)
@@ -323,6 +324,9 @@ def main() -> None:
                         0.0, payload=dict(item),
                     ))
 
+            click = disc_click_point(*world.self_position, str(solution["direction"]), float(solution["angle_degrees"]), float(solution["power"]), image.shape[1])
+            print(format_aim_report(mode, solution, value, direction, click), flush=True)
+
             def click_final(result):
                 try:
                     latest_hwnd = find_game_window()
@@ -331,13 +335,13 @@ def main() -> None:
                         *world.self_position, str(result.payload.get("direction", solution.get("direction", "right"))),
                         float(result.angle), float(result.power), latest_size[0],
                     )
-                    if not (0 <= latest_click[0] < latest_size[0] and 0 <= latest_click[1] < latest_size[1]):
-                        print(f"CLICK_STATUS=OFFSCREEN CLICK_POS={latest_click} MANUAL CONTROL: POWER={result.power} ANGLE={result.angle} (power, angle)=({result.power}, {result.angle})", flush=True)
-                        return "OFFSCREEN"
-                    ensure_game_window_is_active(latest_hwnd)
-                    click_screen_point((latest_origin[0] + latest_click[0], latest_origin[1] + latest_click[1]))
-                    print(f"CLICK_STATUS=SUCCESS CLICK_POS={latest_click}", flush=True)
-                    return "SUCCESS"
+                    return click_client_point(
+                        latest_click,
+                        latest_origin,
+                        latest_size,
+                        activate=lambda: ensure_game_window_is_active(latest_hwnd),
+                        click=click_screen_point,
+                    )
                 except Exception as error:
                     print(f"CLICK_STATUS=FAILED reason={error} MANUAL CONTROL: POWER={result.power} ANGLE={result.angle} (power, angle)=({result.power}, {result.angle})", flush=True)
                     return "FAILED"
@@ -346,14 +350,14 @@ def main() -> None:
             if reflection_results:
                 final_manager = FinalResultManager(reflection_results, click_final)
                 click_status = final_manager.activate(0) or "FAILED"
-            click = disc_click_point(*world.self_position, str(solution["direction"]), float(solution["angle_degrees"]), float(solution["power"]), image.shape[1])
-            if not (0 <= click[0] < size[0] and 0 <= click[1] < size[1]):
-                raise RuntimeError("aim disc point is outside game client")
             if not reflection_results:
-                ensure_game_window_is_active(hwnd)
-                click_screen_point((origin[0] + click[0], origin[1] + click[1]))
-                click_status = "SUCCESS"
-            print(format_aim_report(mode, solution, value, direction, click), flush=True)
+                click_status = click_client_point(
+                    click,
+                    origin,
+                    size,
+                    activate=lambda: ensure_game_window_is_active(hwnd),
+                    click=click_screen_point,
+                )
             if capture_mode and click_status == "SUCCESS":
                 capture_stem = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                 try:
@@ -384,6 +388,7 @@ def main() -> None:
             print(f"Aim skipped: {error}")
 
     keyboard.add_hotkey("e", aim)
+    keyboard.add_hotkey("f5", aim)
     keyboard.add_hotkey("caps lock", toggle_capture)
     keyboard.add_hotkey("t", lambda: choose("normal_low"))
     keyboard.add_hotkey("h", lambda: choose("wormhole_low"))

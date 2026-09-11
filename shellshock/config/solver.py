@@ -1,0 +1,17 @@
+"""Physical acceptance rules and bounded search budgets."""
+REFLECTION_MIN_INCIDENCE = .08  # Preserve the existing grazing-contact exclusion.
+INTEGER_ANGLE_RADIUS = 2
+MISS_TIE_THRESHOLD_AT_REFERENCE = 2.
+MAX_FLIGHT_TIME = 12.
+TARGET_ACCEPT_RADIUS_AT_REFERENCE = 24.
+WAYPOINT_RADIUS_SCALE = .8
+UNEXPECTED_MARGIN_PIXELS = 10.  # Absolute pixels in the source image; not DPI-scaled.
+LINE_CONTACT_FRACTION = .9
+ROUTE_LIMIT = 192
+INTEGER_REPLAY_LIMIT = 1200
+SEEDS_PER_ROUTE = 12
+
+# Layer A covers continuous intervals; these limits retain UNKNOWN, never reject.
+LAYER_A_BOX_BUDGET = 15
+LAYER_A_DEPTH_LIMIT = 3
+LAYER_A_CONTRACTION_ROUNDS = 5
