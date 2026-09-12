@@ -23,6 +23,7 @@ class DetectionBox:
     confidence: float
     keypoints: tuple[PoseKeypoint, ...] = ()
     source: str = "yolo"
+    refined_center: Point | None = None
 
 
 @dataclass(frozen=True)

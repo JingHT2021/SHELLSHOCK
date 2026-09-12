@@ -25,6 +25,8 @@ from shellshock.perception.yolo import YoloDetector
 from shellshock.perception.world import build_world_from_image_with_diagnostics
 from shellshock.perception.wind import detect_wind
 from shellshock.interaction.results import FinalResultManager, FinalReplayResult
+from shellshock.interaction.aim_state import AimState
+from shellshock.interaction.hotkeys import register_primary_digit_hotkey
 
 DEFAULT_WEIGHTS = (DATA_ROOT / 'runs/shellshock_yolo11n_pose_v1/weights/best.pt')
 EXIT_HOTKEY = "delete"
@@ -66,6 +68,9 @@ def format_aim_report(mode: str, solution: dict[str, object], wind_value: int | 
     if solution.get('relaxed_target_acceptance'):
         lines.append(f"RELAXED_TARGET radius={float(solution.get('target_accept_radius', 0.0)):.2f} px")
     timing = solution.get('timing')
+    if not isinstance(timing, dict):
+        diagnostics = solution.get('diagnostics')
+        timing = diagnostics.get('timing') if isinstance(diagnostics, dict) else None
     if isinstance(timing, dict):
         lines.append(
             "TIME A {:.1f}ms B {:.1f}ms C1 {:.1f}ms C2 {:.1f}ms TOTAL {:.1f}ms".format(
@@ -150,10 +155,12 @@ def format_solver_diagnostics(diagnostics: dict[str, object], *, line_count: int
     return '\n'.join(tuple(item for item in (
         f"OBSTACLES lines={line_count} circles={circle_count}",
         "STAGES A_passed={} B_passed={} C_raw={} C_unique={} replays={} failed={}".format(
-            diagnostics.get('layer_a_passed', 0), diagnostics.get('layer_b_passed', 0),
-            diagnostics.get('integer_candidates_raw', 0), diagnostics.get('integer_candidates_unique', 0),
-            diagnostics.get('integer_full_replays', diagnostics.get('full_replays', 0)),
-            diagnostics.get('integer_replay_failed', 0),
+            diagnostics.get('layer_a_passed', diagnostics.get('layer_a_generated', 0) - diagnostics.get('layer_a_rejected', 0)),
+            diagnostics.get('layer_b_passed', 0),
+            diagnostics.get('integer_candidates_raw', diagnostics.get('c1_candidates_raw', 0)),
+            diagnostics.get('integer_candidates_unique', diagnostics.get('c1_candidates_unique', 0)),
+            diagnostics.get('integer_full_replays', diagnostics.get('candidate_count', diagnostics.get('full_replays', 0))),
+            diagnostics.get('integer_replay_failed', diagnostics.get('c2_failures', 0)),
         ),
         f"REASONS {' '.join(reasons) if reasons else 'none'}",
         replay_text,
@@ -173,10 +180,12 @@ def format_solver_summary(diagnostics: dict[str, object]) -> str:
     timing = diagnostics.get('timing') if isinstance(diagnostics.get('timing'), dict) else {}
     lines = [
         "STAGES A_passed={} B_passed={} C_raw={} C_unique={} replays={} failed={}".format(
-            diagnostics.get('layer_a_passed', 0), diagnostics.get('layer_b_passed', 0),
-            diagnostics.get('integer_candidates_raw', 0), diagnostics.get('integer_candidates_unique', 0),
-            diagnostics.get('integer_full_replays', diagnostics.get('full_replays', 0)),
-            diagnostics.get('integer_replay_failed', 0),
+            diagnostics.get('layer_a_passed', diagnostics.get('layer_a_generated', 0) - diagnostics.get('layer_a_rejected', 0)),
+            diagnostics.get('layer_b_passed', 0),
+            diagnostics.get('integer_candidates_raw', diagnostics.get('c1_candidates_raw', 0)),
+            diagnostics.get('integer_candidates_unique', diagnostics.get('c1_candidates_unique', 0)),
+            diagnostics.get('integer_full_replays', diagnostics.get('candidate_count', diagnostics.get('full_replays', 0))),
+            diagnostics.get('integer_replay_failed', diagnostics.get('c2_failures', 0)),
         ),
         f"REASONS {' '.join(reasons) if reasons else 'none'}",
         "TIME {:.1f}ms".format(1000 * float(timing.get('total_seconds', diagnostics.get('total_seconds', 0.0)))),
@@ -234,6 +243,7 @@ def main() -> None:
     mode = "normal_low"
     capture_mode = False
     final_manager = None
+    aim_state = AimState()
 
     def choose(value: str) -> None:
         nonlocal mode, final_manager
@@ -245,7 +255,7 @@ def main() -> None:
         nonlocal final_manager
         if mode_parts(mode)[0] != "reflection" or final_manager is None:
             if mode_parts(mode)[0] == "reflection":
-                print("No active reflection candidates; press E to calculate first", flush=True)
+                print("No active reflection candidates; press Shift to calculate first", flush=True)
                 return
             choose(select_mode("page up" if delta < 0 else "page down", mode))
             return
@@ -258,6 +268,16 @@ def main() -> None:
         nonlocal capture_mode
         capture_mode = not capture_mode
         print(f"Capture mode: {'ON' if capture_mode else 'OFF'}", flush=True)
+
+    def mark_self_center() -> None:
+        try:
+            hwnd = find_game_window()
+            origin, size = client_screen_geometry(hwnd)
+            point = screen_to_client_point(win32api.GetCursorPos(), origin, size)
+            aim_state.mark_temporary_self(point)
+            print(f"Temporary self center: {point}; press Shift to calculate once", flush=True)
+        except (RuntimeError, ValueError) as error:
+            print(f"Self center not marked: {error}", flush=True)
 
     def aim() -> None:
         try:
@@ -276,10 +296,13 @@ def main() -> None:
             orange = sum(box.name == "portal_orange" for box in detections)
             blue = sum(box.name == "portal_blue" for box in detections)
             print(f"World: self={'yes' if world.self_position else 'no'}; obstacles lines={len(world.lines)}, circles={len(world.circles)}; portals orange={orange}, blue={blue}, pairs={len(world.portal_pairs)}, unpaired={world.unpaired_portals}", flush=True)
-            if world.self_position is None:
+            source_position = aim_state.source_for_shift(world.self_position)
+            if source_position is None:
                 raise RuntimeError("YOLO did not find one unambiguous self tank")
+            if world.self_position != source_position:
+                print(f"Using temporary self center: {source_position}", flush=True)
             value, direction = analysis.wind_value, analysis.wind_direction
-            solution = solve_integer_shot(world.self_position, target, world, value, direction, image.shape[1], mode)
+            solution = solve_integer_shot(source_position, target, world, value, direction, image.shape[1], mode)
             if mode_parts(mode)[0] == "normal" and solution.get('diagnostics'):
                 print(format_normal_diagnostics(solution['diagnostics']), flush=True)
             if solution.get("status") != "reachable":
@@ -324,7 +347,7 @@ def main() -> None:
                         0.0, payload=dict(item),
                     ))
 
-            click = disc_click_point(*world.self_position, str(solution["direction"]), float(solution["angle_degrees"]), float(solution["power"]), image.shape[1])
+            click = disc_click_point(*source_position, str(solution["direction"]), float(solution["angle_degrees"]), float(solution["power"]), image.shape[1])
             print(format_aim_report(mode, solution, value, direction, click), flush=True)
 
             def click_final(result):
@@ -332,7 +355,7 @@ def main() -> None:
                     latest_hwnd = find_game_window()
                     latest_origin, latest_size = client_screen_geometry(latest_hwnd)
                     latest_click = disc_click_point(
-                        *world.self_position, str(result.payload.get("direction", solution.get("direction", "right"))),
+                        *source_position, str(result.payload.get("direction", solution.get("direction", "right"))),
                         float(result.angle), float(result.power), latest_size[0],
                     )
                     return click_client_point(
@@ -387,16 +410,16 @@ def main() -> None:
         except (RuntimeError, ValueError) as error:
             print(f"Aim skipped: {error}")
 
-    keyboard.add_hotkey("e", aim)
-    keyboard.add_hotkey("f5", aim)
+    keyboard.add_hotkey("shift", aim)
+    keyboard.add_hotkey("ctrl", mark_self_center)
     keyboard.add_hotkey("caps lock", toggle_capture)
-    keyboard.add_hotkey("t", lambda: choose("normal_low"))
-    keyboard.add_hotkey("h", lambda: choose("wormhole_low"))
-    keyboard.add_hotkey("r", lambda: choose("reflection"))
+    register_primary_digit_hotkey(keyboard, "1", lambda: choose("normal_low"))
+    register_primary_digit_hotkey(keyboard, "2", lambda: choose("reflection_low"))
+    register_primary_digit_hotkey(keyboard, "3", lambda: choose("wormhole_low"))
     keyboard.add_hotkey("page up", lambda: switch_final_candidate(-1))
     keyboard.add_hotkey("page down", lambda: switch_final_candidate(1))
     keyboard.add_hotkey(EXIT_HOTKEY, lambda: print("Exiting YOLO aim...", flush=True))
-    print("Ready: E=aim, CapsLock=toggle capture, T=normal, H=wormhole, R=reflection, PageUp=high arc, PageDown=low arc, Del=quit")
+    print("Ready: 1=normal, 2=reflection, 3=wormhole, Shift=aim, Ctrl=mark self center, CapsLock=toggle capture, PageUp=high arc, PageDown=low arc, Del=quit")
     keyboard.wait(EXIT_HOTKEY)
 
 

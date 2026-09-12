@@ -16,7 +16,7 @@ DEFAULT_BOX_SIZE_AT_REFERENCE = (38.4, 28.8)
 
 @dataclass(frozen=True)
 class PinkObstacleConfig:
-    """Strict HSV and geometry thresholds for reflective pink obstacles."""
+    """HSV and geometry thresholds for bright white reflective obstacles."""
 
     hsv_lower: tuple[int, int, int] = (0, 0, 230)
     hsv_upper: tuple[int, int, int] = (0, 0, 255)

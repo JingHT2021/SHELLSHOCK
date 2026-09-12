@@ -165,11 +165,76 @@ def solver_log_lines(solution):
     keys = ("layer_a_generated", "layer_a_rejected", "layer_b_seed_count",
             "candidate_count", "verified_count", "budget_exhausted")
     lines = [" ".join(f"{key}={diagnostics[key]}" for key in keys if key in diagnostics)]
-    for entry in diagnostics.get("route_trace", ())[-8:]:
-        lines.append(f"{entry.get('route', [])} A={entry.get('layer_a', '?')} {entry.get('reason', '')} seeds={entry.get('continuous_seeds', 0)}")
+    if solution.get("selected_route_id") is not None:
+        lines.append(f"SELECTED route_id={solution.get('selected_route_id')} branch_id={solution.get('selected_branch_id')} candidate_id={solution.get('selected_candidate_id')}")
+    for entry in diagnostics.get("route_trace", ()):
+        layer_b = entry.get("layer_b", "PASS" if entry.get("continuous_seeds", 0) else "REJECT")
+        lines.append(
+            f"ROUTE {entry.get('route', [])} layer_a={entry.get('layer_a', '?')} "
+            f"layer_b={layer_b} reason={entry.get('reason', '')} "
+            f"seeds={entry.get('continuous_seeds', 0)}"
+        )
+    for entry in diagnostics.get("candidate_trace", ()):
+        lines.append(
+            f"CANDIDATE route={entry.get('route', [])} angle={entry.get('angle', '?')} "
+            f"power={entry.get('power', '?')} layer_c1={entry.get('layer_c1', '?')} "
+            f"layer_c2={entry.get('layer_c2', '?')} reason={entry.get('reason', '')}"
+        )
     for reason, count in sorted(diagnostics.get("rejected_reasons", {}).items()):
         lines.append(f"{reason}={count}")
+    selected = diagnostics.get("selected_route")
+    branch = diagnostics.get("selected_branch")
+    candidate = diagnostics.get("selected_candidate")
+    if selected is not None:
+        lines.append(f"A_CHAIN id={selected.get('id')} route={selected.get('route')} reason={selected.get('reason')}")
+    if branch is not None:
+        lines.append(f"B_BRANCH id={branch.get('id')} parent_route_id={branch.get('route_id')} seed_index={branch.get('seed_index')}")
+    if candidate is not None:
+        lines.append(f"C_SELECTED id={candidate.get('id')} parent_route_id={candidate.get('route_id')} parent_branch_id={candidate.get('branch_id')} angle={candidate.get('angle')} power={candidate.get('power')}")
     return [line for line in lines if line]
+
+
+def build_final_trace(solution, predicted_points, world):
+    """Return JSON-safe lineage and exact geometry for the selected replay."""
+    from shellshock.math2d.geometry import trajectory_position
+    from shellshock.physics.events.portal import portal_map, translate
+
+    segments = []
+    raw_segments = solution.get("segments", ())
+    for index, segment in enumerate(raw_segments):
+        start = tuple(float(value) for value in segment["start"])
+        velocity = tuple(float(value) for value in segment["velocity"])
+        acceleration = tuple(float(value) for value in segment["acceleration"])
+        duration = float(segment["duration"])
+        end = tuple(float(value) for value in trajectory_position(start, velocity, acceleration, duration))
+        segments.append({"index": index, "start": start, "end": end, "velocity": velocity,
+                         "acceleration": acceleration, "duration": duration,
+                         "elapsed": float(segment.get("elapsed", 0.0))})
+    transitions = []
+    portals = portal_map(world)
+    for event_index, event in enumerate(solution.get("event_trace", ())):
+        if event.get("kind") != "portal":
+            continue
+        portal_id = str(event.get("id"))
+        if portal_id not in portals:
+            continue
+        entry, exit_portal, exit_id = portals[portal_id]
+        entry_point = tuple(float(value) for value in event["point"])
+        exit_point = tuple(float(value) for value in translate(entry_point, entry, exit_portal))
+        transitions.append({"event_index": event_index, "portal_id": portal_id,
+                            "entry_portal": {"center": tuple(entry.center), "radius": float(entry.radius)},
+                            "exit_portal": {"id": exit_id, "center": tuple(exit_portal.center), "radius": float(exit_portal.radius)},
+                            "entry_point": entry_point, "exit_point": exit_point,
+                            "displacement": tuple(exit_point[i] - entry_point[i] for i in (0, 1)),
+                            "time": float(event.get("time", 0.0))})
+    return {"selected_route_id": solution.get("selected_route_id"),
+            "selected_branch_id": solution.get("selected_branch_id"),
+            "selected_candidate_id": solution.get("selected_candidate_id"),
+            "route": solution.get("route", ()),
+            "events": list(solution.get("events", ())),
+            "waypoints": [dict(item) for item in solution.get("event_trace", ())],
+            "segments": segments, "portal_transitions": transitions,
+            "sampled_points": [None if point is None else tuple(float(value) for value in point) for point in predicted_points]}
 
 
 def manual_controls(scene, solution):
@@ -232,14 +297,13 @@ def render_replay_visual(image, predicted, guide, scene, report, *, show_annotat
         point = tuple(round(value) for value in point)
         cv2.drawMarker(overlay, point, (255, 0, 255), cv2.MARKER_DIAMOND, 18, 2)
         cv2.putText(overlay, label, (point[0] + 8, point[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 255), 2)
-    error = report["error"]
-    solution = report["solution"]
+    solution = report.get("solution", {})
     wind_value = report.get("pending_wind_value", report.get("wind_value", 0))
     pending = "*" if report.get("pending_wind_value") is not None and report.get("pending_wind_value") != report.get("wind_value") else ""
     wind = f"WIND={wind_value:g}{pending} {str(report.get('wind_direction', 'right')).upper()}"
     controls = f"ANGLE={solution.get('angle_degrees', 'N/A')} POWER={solution.get('power', 'N/A')}"
     manual = " MANUAL=ON" if report.get("manual_adjust") else ""
-    text = f"SOURCE={report['source']} MODE={solution.get('mode', '')} {wind} {controls}{manual}"
+    text = f"SOURCE={report.get('source', 'pending')} MODE={solution.get('mode', '')} {wind} {controls}{manual}"
     cv2.putText(overlay, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 220, 255), 2)
     if pending:
         cv2.putText(overlay, f"WIND PENDING={wind_value:g}  (ENTER=APPLY)", (10, 75), cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 255, 255), 2)
@@ -284,7 +348,7 @@ def _target(scene):
     return max(enemies, key=lambda item: item.confidence).center if enemies else None
 
 
-def replay_image(image_path, *, source="hybrid", weights=None, mode="normal_low", root=DATA_ROOT, output_root=(DATA_ROOT / 'annotate/replay'), target=None, scene_override=None, barrel_extension=35.0, angle_override=None, power_override=None, wind_override=None):
+def replay_image(image_path, *, source="hybrid", weights=None, mode="normal_low", root=DATA_ROOT, output_root=(DATA_ROOT / 'annotate/replay'), target=None, scene_override=None, barrel_extension=35.0, angle_override=None, power_override=None, wind_override=None, persist=True, candidate_index=0):
     image = cv2.imread(str(image_path))
     if image is None:
         raise ValueError(f"cannot read image: {image_path}")
@@ -311,12 +375,21 @@ def replay_image(image_path, *, source="hybrid", weights=None, mode="normal_low"
         wind_value = float(meta.get("wind_value", 0.0) or 0.0)
         wind_direction = str(meta.get("wind_direction", "right")).lower()
         solution = solve_integer_shot(world.self_position, target, world, wind_value, wind_direction, image.shape[1], normalize_mode(mode), barrel_extension=barrel_extension)
+    if str(mode).startswith("reflection_"):
+        candidates = solution.get("diagnostics", {}).get("final_results", ())
+        if candidates:
+            selected_index = int(candidate_index) % len(candidates)
+            diagnostics = solution.get("diagnostics", {})
+            solution = {**candidates[selected_index], "mode": normalize_mode(mode), "status": "reachable", "diagnostics": diagnostics}
+            solution["candidate_index"] = selected_index
+            solution["candidate_count"] = len(candidates)
     if world.self_position is not None and solution.get("status") == "reachable":
         source_point = solution_launch_point(world.self_position, solution, image.shape[1], barrel_extension)
     else:
         source_point = world.self_position or (0.0, 0.0)
     wind_value = float(meta.get("wind_value", 0.0) or 0.0)
     predicted = sample_solution_trajectory(solution, source_point, image.shape[1], wind_value, str(meta.get("wind_direction", "right")), 120, world=world)
+    solution["final_trace"] = build_final_trace(solution, predicted, world)
     guide = GuideDetection("disabled", reason="game_guide_detection_disabled")
     event_markers = []
     if solution.get("reflection_point") is not None:
@@ -330,23 +403,24 @@ def replay_image(image_path, *, source="hybrid", weights=None, mode="normal_low"
         except (ValueError, IndexError):
             pass
     report = {"image": str(image_path), "source": source, "target": target, "self_center": world.self_position, "solution": solution, "wind_value": wind_value, "wind_direction": str(meta.get("wind_direction", "right")), "event_markers": event_markers, "debug_logs": solver_log_lines(solution), "keypoint_errors": keypoint_errors, "geometry_sources": {item["class"]: item["source"] for item in keypoint_errors}, "guide": {"status": guide.status, "confidence": 0.0, "reason": guide.reason, "points": (), "fit_parameters": {}}, "error": compare_trajectories(predicted, ())}
-    output_root = Path(output_root)
-    (output_root / "overlays").mkdir(parents=True, exist_ok=True)
-    (output_root / "reports").mkdir(parents=True, exist_ok=True)
-    (output_root / "merged_annotations").mkdir(parents=True, exist_ok=True)
     report["predicted_points"] = predicted
     overlay = render_replay_visual(image, predicted, guide, scene, report)
-    stem = Path(image_path).stem
-    cv2.imwrite(str(output_root / "overlays" / f"{stem}.png"), overlay)
-    (output_root / "reports" / f"{stem}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, default=list) + "\n", encoding="utf-8")
-    keypoint_log = [
-        "KEYPOINT_ERROR class={} source={} {}".format(
-            item.get("class"), item.get("source"), ", ".join(f"{key}={value:.2f}px" for key, value in item.items() if key.endswith("error_px") and value is not None)
-        )
-        for item in keypoint_errors
-    ]
-    (output_root / "reports" / f"{stem}.log").write_text("\n".join([*report.get("debug_logs", ()), *keypoint_log]) + "\n", encoding="utf-8")
-    (output_root / "merged_annotations" / f"{stem}.json").write_text(json.dumps(scene_to_dict(scene), ensure_ascii=False, indent=2, default=list) + "\n", encoding="utf-8")
+    if persist:
+        output_root = Path(output_root)
+        (output_root / "overlays").mkdir(parents=True, exist_ok=True)
+        (output_root / "reports").mkdir(parents=True, exist_ok=True)
+        (output_root / "merged_annotations").mkdir(parents=True, exist_ok=True)
+        stem = Path(image_path).stem
+        cv2.imwrite(str(output_root / "overlays" / f"{stem}.png"), overlay)
+        (output_root / "reports" / f"{stem}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, default=list) + "\n", encoding="utf-8")
+        keypoint_log = [
+            "KEYPOINT_ERROR class={} source={} {}".format(
+                item.get("class"), item.get("source"), ", ".join(f"{key}={value:.2f}px" for key, value in item.items() if key.endswith("error_px") and value is not None)
+            )
+            for item in keypoint_errors
+        ]
+        (output_root / "reports" / f"{stem}.log").write_text("\n".join([*report.get("debug_logs", ()), *keypoint_log]) + "\n", encoding="utf-8")
+        (output_root / "merged_annotations" / f"{stem}.json").write_text(json.dumps(scene_to_dict(scene), ensure_ascii=False, indent=2, default=list) + "\n", encoding="utf-8")
     return report, overlay, scene, paths
 
 

@@ -3,6 +3,15 @@ import numpy as np
 import pytest
 from shellshock.annotations.conversion import AnnotationBox,SceneAnnotation,annotations_to_world
 from shellshock.perception.world import World
+from shellshock.domain.world import RewardZone
+
+
+def test_numeric_mode_hotkeys_select_requested_mode_family():
+    from shellshock.planning.policies import select_mode
+
+    assert select_mode("1") == "normal_low"
+    assert select_mode("2") == "reflection_low"
+    assert select_mode("3") == "wormhole_low"
 
 def test_manual_circle_is_authoritative_over_image_fit():
     image=np.zeros((200,200,3),np.uint8);cv2.circle(image,(95,95),35,(255,0,255),3)
@@ -18,6 +27,17 @@ def test_common_solver_verifies_the_returned_angle_muzzle():
     result=solve_integer_shot(source,(850,700),World(image_width=1920),0,'right',1920,'normal_high')
     assert result['launch_point']==muzzle_position(source,result['direction'],result['angle_degrees'],1920)
     assert result['segments'][0]['start']==result['launch_point']
+
+
+def test_common_solver_reports_each_search_stage_duration():
+    from shellshock.application.solver import solve_integer_shot
+
+    result = solve_integer_shot((100,700),(850,700),World(image_width=1920),0,'right',1920,'normal_high')
+    timing = result['diagnostics']['timing']
+
+    assert set(timing) == {'layer_a_seconds', 'layer_b_seconds', 'layer_c1_seconds', 'layer_c2_seconds', 'total_seconds'}
+    assert all(value >= 0 for value in timing.values())
+    assert timing['total_seconds'] >= timing['layer_a_seconds']
 
 def test_overlay_uses_segments_and_breaks_portal_jump():
     from shellshock.rendering.trajectory import sample_solution_trajectory
@@ -52,6 +72,41 @@ def test_replay_diagnostics_show_current_stage_counts():
     text = '\n'.join(lines)
     assert 'candidate_count=50' in text and 'budget_exhausted=True' in text
     assert 'portal' in text and 'PASS' in text
+
+
+def test_solver_exposes_selected_a_b_c_lineage():
+    from shellshock.planning.unified import solve_routes
+
+    result = solve_routes(
+        (100, 700), (850, 700), World(image_width=1920, rewards=(RewardZone((300, 700), 100, 2, 'r'),)), 0, 'right', 1920,
+        'normal', 'low', route_limit=8, replay_limit=40,
+    )
+
+    assert result['status'] == 'reachable'
+    assert result['selected_route_id'] is not None
+    assert result['selected_branch_id'] is not None
+    assert result['selected_candidate_id'] is not None
+    assert result['diagnostics']['selected_route']['id'] == result['selected_route_id']
+    assert result['diagnostics']['selected_branch']['id'] == result['selected_branch_id']
+    assert result['diagnostics']['selected_candidate']['id'] == result['selected_candidate_id']
+
+
+def test_replay_diagnostics_include_route_and_candidate_stage_results():
+    from replay_shellshock import solver_log_lines
+    lines = solver_log_lines({'diagnostics': {
+        'route_trace': [{
+            'route': [('line', 0)], 'layer_a': 'PASS', 'reason': '',
+            'continuous_seeds': 2, 'layer_b': 'PASS',
+        }],
+        'candidate_trace': [{
+            'route': [('line', 0)], 'angle': 42, 'power': 77,
+            'layer_c1': 'PASS', 'layer_c2': 'REJECT', 'reason': 'target-miss',
+        }],
+    }})
+    text = '\n'.join(lines)
+    assert 'layer_b=PASS' in text
+    assert 'angle=42' in text and 'power=77' in text
+    assert 'layer_c2=REJECT' in text and 'target-miss' in text
 
 def test_manual_controls_preserve_solver_direction():
     from replay_shellshock import manual_controls

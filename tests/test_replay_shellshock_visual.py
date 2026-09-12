@@ -30,3 +30,10 @@ def test_replay_hides_duplicate_white_self_pose_point():
     rendered = render_replay_visual(image, (), None, scene, report)
 
     assert tuple(rendered[34, 34]) != (255, 255, 255)
+
+
+def test_replay_visual_accepts_empty_report_during_initial_frame():
+    image = np.zeros((40, 40, 3), dtype=np.uint8)
+    scene = SimpleNamespace(boxes=())
+    rendered = render_replay_visual(image, (), None, scene, {})
+    assert rendered.shape == image.shape

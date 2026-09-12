@@ -53,7 +53,7 @@ def fit_standard_circle(roi, class_name, expected, min_radius, max_radius, *, co
         return None
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    ranges = {'obstacle_circle': ((0, 0, 230), (179, 20, 255)),
+    ranges = {'obstacle_circle': ((0, 0, 230), (0, 0, 255)),
               'portal_orange': ((0, 65, 90), (30, 255, 255)),
               'portal_blue': ((85, 65, 90), (130, 255, 255))}
     if color_only and class_name not in ranges:

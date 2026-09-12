@@ -7,8 +7,6 @@ from numbers import Real
 AIM_DISC_RADIUS_AT_REFERENCE = 332.5
 """Safe full-power aim-disc radius at 1920-pixel client width."""
 
-AIM_DISC_CENTER_OFFSET_AT_REFERENCE = (2.5, 3.5)
-"""Aim-disc center minus green-tank detection center at 1920-pixel client width."""
 _REFERENCE_IMAGE_WIDTH = 1920.0
 
 
@@ -39,8 +37,6 @@ def disc_click_point(
     if direction == "left":
         horizontal = -horizontal
 
-    center_x += AIM_DISC_CENTER_OFFSET_AT_REFERENCE[0] * scale
-    center_y += AIM_DISC_CENTER_OFFSET_AT_REFERENCE[1] * scale
     return (round(center_x + horizontal), round(center_y - vertical))
 
 

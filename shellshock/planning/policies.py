@@ -22,5 +22,5 @@ def select_mode(key,current_mode="normal_low"):
     if key in {'page up','page down'}:
         family,_=mode_parts(current_mode)
         return f"{family}_{'high' if key=='page up' else 'low'}"
-    aliases={'r':'reflection_low','h':'wormhole_low','t':'normal_low'}
+    aliases={'1':'normal_low','2':'reflection_low','3':'wormhole_low'}
     return normalize_mode(aliases.get(key,key if key in {"normal_low","normal_high","wormhole_low","wormhole_high","reflection_low","reflection_high","reflection"} else current_mode))

@@ -36,6 +36,42 @@ def circle_entry(start, velocity, acceleration, center, radius, limit, allow_ins
     return None
 
 
+def portal_reentry_time(start, velocity, acceleration, portal, limit):
+    """Return reentry only after the trajectory has left the portal body.
+
+    A teleport can place the projectile outside the trigger radius while it is
+    still inside the visible portal.  That is not a new entry: the projectile
+    must first cross the portal's physical radius outward, then cross the
+    trigger radius inward again.
+    """
+    center = portal.center
+    physical_radius = portal.radius
+    inside = hypot(start[0] - center[0], start[1] - center[1]) <= physical_radius + 1e-8
+    if not inside:
+        return circle_entry(start, velocity, acceleration, center,
+                            trigger_radius(portal), limit)
+    for exit_time in parabola_circle_roots(
+        start, velocity, acceleration, center, physical_radius, limit
+    ):
+        point = np.subtract(trajectory_position(start, velocity, acceleration, exit_time), center)
+        outgoing = trajectory_velocity(velocity, acceleration, exit_time)
+        if float(np.dot(point, outgoing)) <= 1e-7:
+            continue
+        remaining = limit - exit_time
+        if remaining <= EPS:
+            return None
+        reentry_time = circle_entry(
+            trajectory_position(start, velocity, acceleration, exit_time),
+            outgoing,
+            acceleration,
+            center,
+            trigger_radius(portal),
+            remaining,
+        )
+        return exit_time + reentry_time if reentry_time is not None else None
+    return None
+
+
 def segment_distance(start, velocity, acceleration, line, limit):
     """Minimum distance to a finite segment via cubic extrema and projections."""
     d = np.subtract(line.end, line.start).astype(float)
@@ -113,7 +149,9 @@ def _blocked(start, velocity, acceleration, world, duration, wanted, departed, e
 def event_time(event, point, velocity, acceleration, world, remaining, exit_id=None):
     if event.kind=='portal':
         portal=portal_map(world)[event.index][0]
-        return circle_entry(point,velocity,acceleration,portal.center,trigger_radius(portal),remaining,event.index==exit_id)
+        if event.index==exit_id:
+            return portal_reentry_time(point,velocity,acceleration,portal,remaining)
+        return circle_entry(point,velocity,acceleration,portal.center,trigger_radius(portal),remaining)
     if event.kind=='reward':
         obj=world.rewards[int(event.index)]
         return circle_entry(point,velocity,acceleration,obj.center,trigger_radius(obj),remaining)

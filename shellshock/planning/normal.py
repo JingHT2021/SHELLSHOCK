@@ -1,5 +1,6 @@
 """Continuous normal-shot candidates followed by small integer replay."""
 from math import cos, radians, sin
+from time import perf_counter
 
 from shellshock.math2d.ballistics import GRAVITY_AT_REFERENCE, SPEED_PER_POWER_AT_REFERENCE, _wind_acceleration, solve_target
 from shellshock.physics.engine import replay_route
@@ -27,12 +28,19 @@ def _select_normal_candidate(candidates, arc_preference):
 def solve_normal_integer_shot(source, target, world, wind_value, wind_direction,
                               image_width, *, arc_preference='low', force_power=None, tank_center=None, barrel_length=35.0):
     """Use source as the true muzzle, or derive each muzzle from tank_center."""
+    started = perf_counter()
+    layer_a_started = perf_counter()
     scale = image_width / 1920
     acceleration = (_wind_acceleration(wind_value, wind_direction, image_width), GRAVITY_AT_REFERENCE * scale)
     if not _route_possible(source, target, world, (), acceleration,
                            barrel_length*image_width/2560 if tank_center is not None else 0, 24*scale):
         return {'status': 'unreachable', 'reason': 'continuous-route-rejected',
-                'diagnostics': {'layer_a_generated': 1, 'layer_a_rejected': 1}}
+                'diagnostics': {'layer_a_generated': 1, 'layer_a_rejected': 1,
+                                'timing': {'layer_a_seconds': perf_counter()-layer_a_started,
+                                           'layer_b_seconds': 0.0, 'layer_c1_seconds': 0.0,
+                                           'layer_c2_seconds': 0.0, 'total_seconds': perf_counter()-started}}}
+    layer_a_seconds = perf_counter() - layer_a_started
+    layer_b_started = perf_counter()
     theory = solve_target(*source, *target, wind_value, wind_direction, image_width)
     minimum = theory.get('minimum_power', {})
     diagnostics = {
@@ -46,6 +54,8 @@ def solve_normal_integer_shot(source, target, world, wind_value, wind_direction,
     if arc_preference == 'high':
         arcs = theory['power_100']['solutions']
         if not arcs:
+            diagnostics['timing'] = {'layer_a_seconds': layer_a_seconds, 'layer_b_seconds': perf_counter()-layer_b_started,
+                                     'layer_c1_seconds': 0.0, 'layer_c2_seconds': 0.0, 'total_seconds': perf_counter()-started}
             return {'status': 'unreachable', 'reason': 'no-verified-shot', 'diagnostics': diagnostics}
         seed = max(arcs, key=lambda a: a['angle_degrees'])
         powers = range(100-NORMAL_HIGH_POWER_DEVIATION, 101)
@@ -54,15 +64,22 @@ def solve_normal_integer_shot(source, target, world, wind_value, wind_direction,
     else:
         seed = theory['minimum_power']
         if seed.get('status') != 'reachable' or not seed['within_power_limit']:
-            return {'status': 'unreachable', 'reason': 'no-verified-shot'}
+            diagnostics['timing'] = {'layer_a_seconds': layer_a_seconds, 'layer_b_seconds': perf_counter()-layer_b_started,
+                                     'layer_c1_seconds': 0.0, 'layer_c2_seconds': 0.0, 'total_seconds': perf_counter()-started}
+            return {'status': 'unreachable', 'reason': 'no-verified-shot', 'diagnostics': diagnostics}
         center = round(seed['power'])
         powers = range(max(1, center-3), min(100, center+3)+1)
+    layer_b_seconds = perf_counter() - layer_b_started
+    layer_c1_seconds = 0.0
+    layer_c2_seconds = 0.0
     if force_power is not None:
         powers = (force_power,)
     angle_center = round(seed['angle_degrees'])
     direction = seed['direction']
     candidates = []
+    candidate_trace = []
     for power in powers:
+        c1_started = perf_counter()
         centers = [angle_center]
         arcs = tuple(arc for arc in solve_ballistic_for_speed(source, target, acceleration, power*SPEED_PER_POWER_AT_REFERENCE*scale)
                      if (arc.velocity[0] >= 0) == (direction == 'right'))
@@ -74,12 +91,20 @@ def solve_normal_integer_shot(source, target, world, wind_value, wind_direction,
             centers += [round(arc.angle_degrees) for arc in arcs]
         angle_radius = NORMAL_HIGH_ANGLE_RADIUS if arc_preference == 'high' else INTEGER_ANGLE_RADIUS
         angles = sorted({angle for center in centers for angle in range(max(0, center-angle_radius), min(90, center+angle_radius)+1)})
+        layer_c1_seconds += perf_counter() - c1_started
         for angle in angles:
             diagnostics['candidate_count'] += 1
             speed = power * SPEED_PER_POWER_AT_REFERENCE * scale
             velocity = ((1 if direction == 'right' else -1)*speed*cos(radians(angle)), -speed*sin(radians(angle)))
             launch = source if tank_center is None else muzzle_position(tank_center, direction, angle, image_width,barrel_length=barrel_length)
+            c2_started = perf_counter()
             replay = replay_route(launch, velocity, acceleration, world, target, route=())
+            layer_c2_seconds += perf_counter() - c2_started
+            candidate_trace.append({
+                'route': [], 'angle': angle, 'power': power,
+                'layer_c1': 'PASS', 'layer_c2': 'PASS' if replay['valid'] else 'REJECT',
+                'reason': None if replay['valid'] else (replay.get('reason') or 'target-miss'),
+            })
             if replay['valid']:
                 diagnostics['verified_count'] += 1
                 candidates.append({**replay, 'direction': direction, 'angle_degrees': angle,
@@ -89,6 +114,10 @@ def solve_normal_integer_shot(source, target, world, wind_value, wind_direction,
                 reasons = diagnostics['rejected_reasons']
                 reasons[reason] = reasons.get(reason, 0) + 1
     if not candidates:
+        diagnostics['candidate_trace'] = candidate_trace
+        diagnostics['timing'] = {'layer_a_seconds': layer_a_seconds, 'layer_b_seconds': layer_b_seconds,
+                                 'layer_c1_seconds': layer_c1_seconds, 'layer_c2_seconds': layer_c2_seconds,
+                                 'total_seconds': perf_counter()-started}
         return {'status': 'unreachable', 'reason': 'no-verified-shot', 'diagnostics': diagnostics}
     best_reward = max(c.get('damage_multiplier', 1) for c in candidates)
     candidates = [c for c in candidates if c.get('damage_multiplier', 1) == best_reward]
@@ -98,4 +127,8 @@ def solve_normal_integer_shot(source, target, world, wind_value, wind_direction,
         reliable = [c for c in candidates if c['miss_distance'] <= best_miss + MISS_TIE_THRESHOLD_AT_REFERENCE*scale]
     result = _select_normal_candidate(reliable, arc_preference)
     result['diagnostics'] = diagnostics
+    diagnostics['candidate_trace'] = candidate_trace
+    diagnostics['timing'] = {'layer_a_seconds': layer_a_seconds, 'layer_b_seconds': layer_b_seconds,
+                             'layer_c1_seconds': layer_c1_seconds, 'layer_c2_seconds': layer_c2_seconds,
+                             'total_seconds': perf_counter()-started}
     return result

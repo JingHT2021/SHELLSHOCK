@@ -50,3 +50,25 @@ def test_normal_report_keeps_power_and_angle_but_omits_click_coordinates():
     assert "42" in report
     assert "CLICK" not in report
     assert "(-15, 300)" not in report
+
+
+def test_aim_report_reads_stage_timing_from_diagnostics():
+    report = format_aim_report(
+        "normal_low",
+        {
+            "power": 75,
+            "angle_degrees": 42,
+            "diagnostics": {"timing": {
+                "layer_a_seconds": 0.001,
+                "layer_b_seconds": 0.002,
+                "layer_c1_seconds": 0.003,
+                "layer_c2_seconds": 0.004,
+                "total_seconds": 0.010,
+            }},
+        },
+        0,
+        "right",
+        (10, 20),
+    )
+
+    assert "TIME A 1.0ms B 2.0ms C1 3.0ms C2 4.0ms TOTAL 10.0ms" in report

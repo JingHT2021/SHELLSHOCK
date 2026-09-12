@@ -3,7 +3,7 @@ from itertools import permutations
 from shellshock.physics.engine import RouteEvent
 from shellshock.physics.events.portal import portal_map
 from shellshock.planning.iteration import _round_robin
-def candidate_routes(world, family, limit=192):
+def candidate_routes(world, family, limit=None):
     """Fair bounded event topologies; reserve simpler fallbacks at every tier."""
     from heapq import heappush,heappop
     from math import prod
@@ -34,7 +34,7 @@ def candidate_routes(world, family, limit=192):
     routes=[];seen=set()
     for route in _round_robin(subset_routes(subset) for subset in subsets):
         if route in seen:continue
-        if len(routes)>=limit:return routes,True
+        if limit is not None and len(routes)>=limit:return routes,True
         seen.add(route);routes.append(route)
     return routes,bool(queue)
 

@@ -365,9 +365,9 @@ def build_world_from_image_with_diagnostics(boxes: list[DetectionBox], image: np
         elif box.name == "self":
             center = _pose_point(box, 0)
             fitted = None if box.source == "manual" else fit_self_center(image, box)
-            chosen = fitted or center or bbox_center
+            chosen = box.refined_center or fitted or center or bbox_center
             self_candidates.append((box.confidence, chosen))
-            diagnostics.append({"class": box.name, "source": "manual" if box.source == "manual" else "fit" if fitted else "pose" if center else "bbox_center", "center_error_px": _point_error(center, fitted or bbox_center)})
+            diagnostics.append({"class": box.name, "source": "model" if box.refined_center else "manual" if box.source == "manual" else "fit" if fitted else "pose" if center else "bbox_center", "center_error_px": _point_error(center, chosen)})
     self_position = None
     if self_candidates:
         best_confidence = max(confidence for confidence, _ in self_candidates)

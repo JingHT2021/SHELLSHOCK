@@ -1,4 +1,4 @@
-"""Geometry-first pink obstacle detection and annotation storage."""
+"""Geometry-first bright-white obstacle detection and annotation storage."""
 
 from __future__ import annotations
 
@@ -159,7 +159,7 @@ def _line_candidates(mask: np.ndarray, config: PinkObstacleConfig) -> list[LineO
 def detect_pink_obstacle_geometry(
     image: np.ndarray, config: PinkObstacleConfig = PinkObstacleConfig()
 ) -> ObstacleGeometry:
-    """Detect circles first, then fit lines only from pixels outside circle rings."""
+    """Detect bright-white circles first, then fit lines outside their rings."""
     if image is None or image.size == 0:
         raise ValueError("image must not be empty")
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)

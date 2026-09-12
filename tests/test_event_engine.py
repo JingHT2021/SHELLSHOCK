@@ -26,6 +26,18 @@ def test_portal_velocity_and_offset_preserved():
     assert abs(r['flight_time_seconds']-1)<1e-7
     assert r['segments'][1]['start'][0]-r['event_trace'][0]['point'][0]==100
 
+def test_portal_reentry_requires_exiting_physical_portal_first():
+    from shellshock.physics.engine import replay_route,RouteEvent
+    p=SimpleNamespace(
+        orange=SimpleNamespace(center=(0,0),radius=100),
+        blue=SimpleNamespace(center=(1000,0),radius=99),
+    )
+    route=(RouteEvent('portal','0:orange'),RouteEvent('portal','0:blue'))
+    r=replay_route((-200,0),(100,0),(0,0),world(portal_pairs=(p,)),(200,0),route,max_time=20)
+    assert not r['valid']
+    assert r['reason']=='missing-portal'
+    assert len(r['event_trace'])==1
+
 def test_line_only_central_ninety_percent_reflects():
     from shellshock.physics.engine import replay_route,RouteEvent
     line=SimpleNamespace(start=(0,50),end=(100,50))
